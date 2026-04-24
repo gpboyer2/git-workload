@@ -1,6 +1,6 @@
 # git-workload-report
 
-`git-workload-report` 是一个面向离线内网中文团队的 Git 工作量统计工具。它读取本地 Git 仓库历史，统计指定时间范围内的提交次数、新增代码行、删除代码行、周分布和小时分布，并在本机启动中文可视化报告页。
+`git-workload-report` 是一个面向中文团队的 Git 工作量统计工具。它读取本地 Git 仓库历史，统计指定时间范围内的提交次数、新增代码行、删除代码行、周分布和小时分布，并在本机启动中文可视化报告页。
 
 ## 设计目标
 
@@ -54,7 +54,7 @@ GIT_WORKLOAD_REPORT_PORT=21000 git-workload-report 2026-04-01 2026-04-24
 - select + input 组合式筛选
 - 日均工作时长、每周工作时长、加班时间占比估算
 
-## 离线内网说明
+## 说明
 
 报告页位于 `public/local-report/index.html`，打包时会一起进入 release 产物。脚本启动的是 `127.0.0.1` 本地服务，统计参数通过本地 URL 传递，不需要公网。
 

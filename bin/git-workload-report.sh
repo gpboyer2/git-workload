@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# 本脚本的业务目的必须保持清晰：给离线内网中文用户统计 Git 项目工作量，并打开本机 localhost 报告页。
+# 本脚本的业务目的必须保持清晰：给中文用户统计 Git 项目工作量，并打开本机 localhost 报告页。
 # 禁止把报告入口改回 GitHub Pages、Vercel 或任何外网地址；打包后的产物必须不依赖公网服务。
 # 项目已经从原始加班分析场景改为通用 Git 工作量统计场景，入口命名只使用 git-workload-report。
 # 本脚本启动时会生成本地 report-data.json，页面必须基于这份本地数据做项目、人员、时间段筛选。
@@ -79,7 +79,7 @@ do
 done
 
 work_dir=`mktemp -d /tmp/git-workload-report.XXXXXX`
-cp "$source_web_dir/index.html" "$work_dir/index.html"
+cp -R "$source_web_dir"/. "$work_dir"/
 
 python3 - "$time_start" "$time_end" "$author" "$PWD" "$work_dir/report-data.json" "$@" <<'PY'
 import json

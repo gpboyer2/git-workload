@@ -37,7 +37,7 @@ tests/
 public/*
 !public/local-report
 !public/local-report/
-!public/local-report/index.html
+!public/local-report/**
 
 # Git 相关
 .git

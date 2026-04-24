@@ -23,7 +23,7 @@ export class CLIManager {
   private setupProgram(): void {
     this.program
       .name('git-workload-report')
-      .description('离线统计 Git 项目的提交、作者、时间分布和代码改动量')
+      .description('统计 Git 项目的提交、作者、时间分布和代码改动量')
       .version(getPackageVersion(), '-v, --version', '显示版本号')
 
     // 注册根命令默认行为，直接执行分析逻辑
@@ -288,7 +288,7 @@ export class CLIManager {
 `
 
     console.log(chalk.hex('#D72654')(banner))
-    console.log(`> 离线统计 Git 项目的提交、作者、时间分布和代码改动量。
+    console.log(`> 统计 Git 项目的提交、作者、时间分布和代码改动量。
 
 ${chalk.bold('使用方法:')}
   git-workload-report [路径...] [选项]
