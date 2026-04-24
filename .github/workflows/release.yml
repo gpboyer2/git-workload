@@ -27,29 +27,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build project
-        run: npm run build
-
-      - name: Run tests
-        run: npm test
-        continue-on-error: true
-
       - name: Get version from tag
         id: get_version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-      - name: Create tarball
+      - name: Build artifact
         id: tarball
         run: |
+          VERSION="${{ steps.get_version.outputs.VERSION }}" npm run build
           TARBALL="git-workload-report-v${{ steps.get_version.outputs.VERSION }}.tar.gz"
-          rm -rf release
-          mkdir -p release/git-workload-report/bin release/git-workload-report/public
-          cp bin/git-workload-report.sh release/git-workload-report/bin/
-          cp -R public/local-report release/git-workload-report/public/
-          cp README.md LICENSE release/git-workload-report/
-          chmod +x release/git-workload-report/bin/git-workload-report.sh
-          tar -czf "$TARBALL" -C release git-workload-report
           echo "TARBALL=$TARBALL" >> $GITHUB_OUTPUT
+
+      - name: Run tests
+        run: npm test
+        continue-on-error: true
 
       - name: Generate commit log
         id: commits

@@ -70,12 +70,7 @@ GIT_WORKLOAD_REPORT_PORT=21000 git-workload-report 2026-04-01 2026-04-24
 
 ```bash
 npm install
-npm run build
+npm run compile
 npm test -- --runInBand
-rm -rf release
-mkdir -p release/git-workload-report/bin release/git-workload-report/public
-cp bin/git-workload-report.sh release/git-workload-report/bin/
-cp -R public/local-report release/git-workload-report/public/
-cp README.md LICENSE release/git-workload-report/
-tar -czf git-workload-report.tar.gz -C release git-workload-report
+npm run build
 ```

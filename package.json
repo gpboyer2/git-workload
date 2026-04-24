@@ -12,8 +12,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
-    "dev": "npm run build && GIT_WORKLOAD_REPORT_KEEP_ALIVE=1 ./bin/git-workload-report.sh",
+    "build": "bash scripts/build-release.sh",
+    "compile": "tsc",
+    "dev": "npm run compile && GIT_WORKLOAD_REPORT_KEEP_ALIVE=1 ./bin/git-workload-report.sh",
     "preview": "node dist/index.js",
     "test": "jest"
   },
