@@ -26,6 +26,7 @@ logs
 # AI
 CLAUDE.md
 AGENTS.md
+ai-prompt.md
 .cursor/
 .claude/
 
