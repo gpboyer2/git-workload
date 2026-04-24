@@ -23,7 +23,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         run: npm ci
@@ -42,8 +41,14 @@ jobs:
       - name: Create tarball
         id: tarball
         run: |
-          # npm pack 会输出生成的文件名
-          TARBALL=$(npm pack)
+          TARBALL="git-workload-report-v${{ steps.get_version.outputs.VERSION }}.tar.gz"
+          rm -rf release
+          mkdir -p release/git-workload-report/bin release/git-workload-report/public
+          cp bin/git-workload-report.sh release/git-workload-report/bin/
+          cp -R public/local-report release/git-workload-report/public/
+          cp README.md LICENSE release/git-workload-report/
+          chmod +x release/git-workload-report/bin/git-workload-report.sh
+          tar -czf "$TARBALL" -C release git-workload-report
           echo "TARBALL=$TARBALL" >> $GITHUB_OUTPUT
 
       - name: Generate commit log
@@ -86,9 +91,3 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish to npm
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        continue-on-error: true

@@ -72,12 +72,10 @@ GIT_WORKLOAD_REPORT_PORT=21000 git-workload-report 2026-04-01 2026-04-24
 npm install
 npm run build
 npm test -- --runInBand
-npm pack --dry-run
+rm -rf release
+mkdir -p release/git-workload-report/bin release/git-workload-report/public
+cp bin/git-workload-report.sh release/git-workload-report/bin/
+cp -R public/local-report release/git-workload-report/public/
+cp README.md LICENSE release/git-workload-report/
+tar -czf git-workload-report.tar.gz -C release git-workload-report
 ```
-
-## 维护规则
-
-- 不要把报告入口改回远程网页。
-- 不要新增外网依赖来承载报告页。
-- 不要恢复旧业务名称或旧脚本入口。
-- 如果新增统计指标，必须同步验证打包后的 `.tgz` 能在干净目录运行。
