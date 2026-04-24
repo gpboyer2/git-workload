@@ -23,6 +23,7 @@ const chartMap = new Map()
 
 const state = {
   data: null,
+  selectedProjects: new Set(),
   selectedAuthors: new Set(),
   period: "all",
 }
@@ -123,19 +124,26 @@ function renderChoices(container, values, selectedSet) {
 function renderRepoInfo() {
   dom.repoInfoList.textContent = ""
   state.data.repos.forEach((repo) => {
-    const item = document.createElement("div")
+    const item = document.createElement("label")
+    const input = document.createElement("input")
+    const content = document.createElement("span")
     const name = document.createElement("div")
     const meta = document.createElement("div")
     const branch = document.createElement("span")
     const path = document.createElement("span")
     item.className = "repo-info-item"
+    input.type = "checkbox"
+    input.value = repo.name
+    input.checked = state.selectedProjects.has(repo.name)
+    content.className = "repo-info-content"
     name.className = "repo-info-name"
     meta.className = "repo-info-meta"
     name.textContent = repo.name
     branch.textContent = `分支：${repo.branch}`
     path.textContent = repo.path
     meta.append(branch, path)
-    item.append(name, meta)
+    content.append(name, meta)
+    item.append(input, content)
     dom.repoInfoList.append(item)
   })
 }
@@ -211,6 +219,7 @@ function getFilteredCommits() {
   return state.data.commits.filter((commit) => {
     if (startDate && commit.date < startDate) return false
     if (endDate && commit.date > endDate) return false
+    if (state.selectedProjects.size > 0 && !state.selectedProjects.has(commit.project)) return false
     if (state.selectedAuthors.size > 0 && !state.selectedAuthors.has(commit.author)) return false
     return true
   })
@@ -367,6 +376,7 @@ async function bootstrap() {
   renderChoices(dom.authorChoices, state.data.authors, state.selectedAuthors)
   renderPeriodChoices()
   applyPeriod(state.period)
+  bindChoices(dom.repoInfoList, state.selectedProjects)
   bindChoices(dom.authorChoices, state.selectedAuthors)
   dom.periodChoices.addEventListener("click", (event) => {
     const button = event.target

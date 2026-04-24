@@ -4,6 +4,9 @@
 # 禁止把报告入口改回 GitHub Pages、Vercel 或任何外网地址；打包后的产物必须不依赖公网服务。
 # 项目已经从原始加班分析场景改为通用 Git 工作量统计场景，入口命名只使用 git-workload-report。
 # 本脚本启动时会生成本地 report-data.json，终端报告和页面必须基于这份本地数据展示。
+# 用户这次明确要求 directory 参数指向一个用户自定义名称的 .txt 配置文件。
+# 这里的 directory 不是仓库目录，而是“仓库目录清单文件”；禁止改成自动猜测目录或兼容其他后缀。
+# 配置文件每行写一个 Git 仓库路径，空行和 # 开头的注释行会被忽略。
 
 Help()
 {
@@ -12,10 +15,14 @@ Help()
    echo "格式:"
    echo "  git-workload-report [开始日期] [结束日期] [作者关键词] [仓库路径...]"
    echo "  git-workload-report web [开始日期] [结束日期] [作者关键词] [仓库路径...]"
+   echo "  git-workload-report directory=/path/to/directory.txt [web] [开始日期] [结束日期] [作者关键词]"
    echo "示例: git-workload-report 2026-04-01 2026-04-24 peng /path/to/project-a /path/to/project-b"
+   echo "示例: git-workload-report directory=/Users/peng/Desktop/Project/git-workload/directory.txt web"
    echo "说明:"
    echo "  默认直接在终端输出完整汇总报告。"
    echo "  使用 web 子命令时启动本机 localhost 可视化报告页。"
+   echo "  directory 参数必须指向 .txt 配置文件，文件名可自定义，后缀必须是 txt。"
+   echo "  directory 配置文件每行写一个 Git 仓库路径，空行和 # 开头的注释行会被忽略。"
    echo "  不传仓库路径时，默认从脚本所在目录向上查找 Git 仓库根目录。"
    echo "  作者关键词只作为启动时默认筛选，页面打开后仍可多选项目、人员并调整时间段。"
    echo
@@ -28,10 +35,40 @@ then
 fi
 
 report_mode="terminal"
-if [ "$1" == "web" ]
+directory_config_path=""
+business_args=()
+
+for arg in "$@"
+do
+    case "$arg" in
+    web)
+        report_mode="web"
+        ;;
+    directory=*)
+        directory_config_path="${arg#directory=}"
+        ;;
+    *)
+        business_args+=("$arg")
+        ;;
+    esac
+done
+
+if [ -n "$directory_config_path" ]
 then
-    report_mode="web"
-    shift
+    case "$directory_config_path" in
+    *.txt)
+        ;;
+    *)
+        echo "directory 参数必须指向 txt 配置文件，例如：directory=/path/to/directory.txt"
+        exit 1
+        ;;
+    esac
+
+    if [ ! -f "$directory_config_path" ]
+    then
+        echo "directory 配置文件不存在：$directory_config_path"
+        exit 1
+    fi
 fi
 
 if ! command -v python3 >/dev/null 2>&1
@@ -60,9 +97,9 @@ script_path=`python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "
 script_dir="$(cd "$(dirname "$script_path")" && pwd)"
 source_web_dir="$(cd "$script_dir/../public/local-report" && pwd)"
 
-time_start=$1
-time_end=$2
-author=$3
+time_start="${business_args[0]}"
+time_end="${business_args[1]}"
+author="${business_args[2]}"
 
 if [ -z "$time_start" ]
 then
@@ -79,12 +116,13 @@ then
     author=""
 fi
 
-shift_count=$#
-if [ "$shift_count" -gt 3 ]; then shift_count=3; fi
-while [ "$shift_count" -gt 0 ]
+repo_args=()
+business_arg_count=${#business_args[@]}
+business_index=3
+while [ "$business_index" -lt "$business_arg_count" ]
 do
-    shift
-    shift_count=$((shift_count - 1))
+    repo_args+=("${business_args[$business_index]}")
+    business_index=$((business_index + 1))
 done
 
 work_dir=`mktemp -d /tmp/git-workload-report.XXXXXX`
@@ -93,14 +131,14 @@ then
     cp -R "$source_web_dir"/. "$work_dir"/
 fi
 
-python3 - "$report_mode" "$time_start" "$time_end" "$author" "$script_dir" "$work_dir/report-data.json" "$@" <<'PY'
+python3 - "$report_mode" "$time_start" "$time_end" "$author" "$script_dir" "$work_dir/report-data.json" "$directory_config_path" "${repo_args[@]}" <<'PY'
 import json
 import os
 import subprocess
 import sys
 from datetime import datetime
 
-report_mode, time_start, time_end, author_filter, default_dir, output_path, *input_paths = sys.argv[1:]
+report_mode, time_start, time_end, author_filter, default_dir, output_path, directory_config_path, *input_paths = sys.argv[1:]
 
 def run_git(repo_path, args):
     return subprocess.check_output(["git", "-C", repo_path, *args], text=True, stderr=subprocess.DEVNULL)
@@ -118,8 +156,20 @@ def git_root(path):
 def git_branch(path):
     return run_git(path, ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
 
+def read_directory_config():
+    if not directory_config_path:
+        return []
+    paths = []
+    with open(directory_config_path, "r", encoding="utf-8") as file:
+        for line in file:
+            value = line.strip()
+            if value and not value.startswith("#"):
+                paths.append(value)
+    return paths
+
 def discover_repos():
-    candidates = input_paths or [default_dir]
+    configured_paths = read_directory_config()
+    candidates = [*configured_paths, *input_paths] or [default_dir]
     roots = []
     for candidate in candidates:
         path = os.path.realpath(candidate)

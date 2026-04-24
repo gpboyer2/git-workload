@@ -25,6 +25,12 @@ bash /path/to/git-workload-report.sh 2026-04-01 2026-04-24
 git-workload-report 2026-04-01 2026-04-24
 ```
 
+解压本地制品后，也可以直接运行根目录的启动脚本：
+
+```bash
+./start.sh
+```
+
 指定作者：
 
 ```bash
@@ -35,6 +41,20 @@ git-workload-report 2026-04-01 2026-04-24 peng
 
 ```bash
 git-workload-report web 2026-04-01 2026-04-24 peng
+```
+
+如果仓库较多，可以用 `directory` 参数指向一个 txt 配置文件。文件名可以自定义，但后缀必须是 `.txt`：
+
+```bash
+git-workload-report directory=/Users/peng/Desktop/Project/git-workload/directory.txt
+git-workload-report directory=/Users/peng/Desktop/Project/git-workload/directory.txt web
+```
+
+txt 配置文件每行写一个 Git 仓库路径，空行和 `#` 开头的注释行会被忽略：
+
+```text
+/Users/peng/Desktop/Project/0-ppll/ppll-server
+/Users/peng/Desktop/Project/0-ppll/ppll-wap
 ```
 
 Web 模式会启动本地服务并打开类似地址：

@@ -18,9 +18,11 @@ rm -rf "$release_dir" "$artifact_file"
 mkdir -p "$artifact_dir/bin" "$artifact_dir/public"
 
 cp bin/git-workload-report.sh "$artifact_dir/bin/"
+cp start.sh "$artifact_dir/"
 cp -R public/local-report "$artifact_dir/public/"
 cp README.md LICENSE "$artifact_dir/"
 chmod +x "$artifact_dir/bin/git-workload-report.sh"
+chmod +x "$artifact_dir/start.sh"
 
 COPYFILE_DISABLE=1 LC_ALL=C tar -czf "$artifact_file" -C "$release_dir" "$project_name"
 

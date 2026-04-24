@@ -174,12 +174,24 @@ input {
 }
 
 .repo-info-item {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 8px;
   border: 1px solid var(--color-border);
   border-radius: 6px;
   background: var(--color-panel);
+  cursor: pointer;
+}
+
+.repo-info-item input {
+  margin-top: 2px;
+}
+
+.repo-info-content {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
 }
 
 .repo-info-name {
