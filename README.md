@@ -76,4 +76,4 @@ npm run build-local
 npm run build-github
 ```
 
-`build-local` 会在本机生成压缩包。`build-github` 不依赖 gh，只会创建并推送版本 tag，GitHub Actions 捕获 tag 后自动生成发布制品；如果版本 tag 已存在，需要先升级版本号。
+`build-local` 会在本机生成压缩包。`build-github` 不依赖 gh，会自动找到下一个可用补丁版本，更新并提交版本号，然后推送分支和版本 tag，GitHub Actions 捕获 tag 后自动生成发布制品。
