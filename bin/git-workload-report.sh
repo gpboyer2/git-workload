@@ -16,7 +16,7 @@ Help()
    echo "说明:"
    echo "  默认直接在终端输出完整汇总报告。"
    echo "  使用 web 子命令时启动本机 localhost 可视化报告页。"
-   echo "  不传仓库路径时，若当前目录是 Git 仓库则分析当前项目；否则扫描当前目录下的一层 Git 仓库。"
+   echo "  不传仓库路径时，默认从脚本所在目录向上查找 Git 仓库根目录。"
    echo "  作者关键词只作为启动时默认筛选，页面打开后仍可多选项目、人员并调整时间段。"
    echo
 }
@@ -79,10 +79,8 @@ then
     author=""
 fi
 
-shift_count=0
-if [ -n "$1" ]; then shift_count=1; fi
-if [ -n "$2" ]; then shift_count=2; fi
-if [ -n "$3" ]; then shift_count=3; fi
+shift_count=$#
+if [ "$shift_count" -gt 3 ]; then shift_count=3; fi
 while [ "$shift_count" -gt 0 ]
 do
     shift
@@ -95,14 +93,14 @@ then
     cp -R "$source_web_dir"/. "$work_dir"/
 fi
 
-python3 - "$report_mode" "$time_start" "$time_end" "$author" "$PWD" "$work_dir/report-data.json" "$@" <<'PY'
+python3 - "$report_mode" "$time_start" "$time_end" "$author" "$script_dir" "$work_dir/report-data.json" "$@" <<'PY'
 import json
 import os
 import subprocess
 import sys
 from datetime import datetime
 
-report_mode, time_start, time_end, author_filter, current_dir, output_path, *input_paths = sys.argv[1:]
+report_mode, time_start, time_end, author_filter, default_dir, output_path, *input_paths = sys.argv[1:]
 
 def run_git(repo_path, args):
     return subprocess.check_output(["git", "-C", repo_path, *args], text=True, stderr=subprocess.DEVNULL)
@@ -118,7 +116,7 @@ def git_root(path):
     return os.path.realpath(run_git(path, ["rev-parse", "--show-toplevel"]).strip())
 
 def discover_repos():
-    candidates = input_paths or [current_dir]
+    candidates = input_paths or [default_dir]
     roots = []
     for candidate in candidates:
         path = os.path.realpath(candidate)
