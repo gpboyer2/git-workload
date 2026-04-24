@@ -78,20 +78,40 @@ then
     exit 1
 fi
 
-case "$(uname -s)" in
-Linux)
-    open_url="xdg-open"
-    ;;
-Darwin)
-    open_url="open"
-    ;;
-CYGWIN*|MINGW32*|MSYS*|MINGW*)
-    open_url="start"
-    ;;
-*)
-    open_url="xdg-open"
-    ;;
-esac
+open_local_url()
+{
+    local target_url="$1"
+
+    if [ -r /proc/version ] && grep -qi microsoft /proc/version
+    then
+        if command -v cmd.exe >/dev/null 2>&1
+        then
+            cmd.exe /C start "" "$target_url" >/dev/null 2>&1 && return 0
+        fi
+
+        if command -v powershell.exe >/dev/null 2>&1
+        then
+            powershell.exe -NoProfile -Command "Start-Process '$target_url'" >/dev/null 2>&1 && return 0
+        fi
+    fi
+
+    if command -v open >/dev/null 2>&1
+    then
+        open "$target_url" >/dev/null 2>&1 && return 0
+    fi
+
+    if command -v xdg-open >/dev/null 2>&1
+    then
+        xdg-open "$target_url" >/dev/null 2>&1 && return 0
+    fi
+
+    if command -v wslview >/dev/null 2>&1
+    then
+        wslview "$target_url" >/dev/null 2>&1 && return 0
+    fi
+
+    return 1
+}
 
 script_path=`python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}"`
 script_dir="$(cd "$(dirname "$script_path")" && pwd)"
@@ -480,7 +500,10 @@ echo "$local_url"
 echo "本地服务进程：$server_pid"
 echo "如需指定端口，可设置环境变量：GIT_WORKLOAD_REPORT_PORT=19960"
 
-$open_url "$local_url"
+if ! open_local_url "$local_url"
+then
+    echo "未能自动打开浏览器，请手动复制上面的地址访问。"
+fi
 
 if [ "$GIT_WORKLOAD_REPORT_KEEP_ALIVE" = "1" ]
 then
