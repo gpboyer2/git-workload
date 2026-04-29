@@ -1,6 +1,6 @@
 {
   "name": "git-workload-report",
-  "version": "1.0.7",
+  "version": "1.0.9",
   "description": "统计 Git 项目的提交、作者、时间分布和代码改动量",
   "bin": {
     "git-workload-report": "./bin/git-workload-report.sh"
@@ -9,6 +9,7 @@
     "bin/git-workload-report.sh",
     "start.sh",
     "directory.txt",
+    "config.json",
     "public/local-report",
     "README.md",
     "LICENSE"
