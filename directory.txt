@@ -5,3 +5,4 @@
 # /Users/peng/Desktop/Project/project-b
 /mnt/d/Projects/codex-config
 /mnt/d/Projects/git-workload
+/mnt/d/projects/pre-commit-hooks

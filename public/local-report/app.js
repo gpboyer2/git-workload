@@ -30,7 +30,7 @@ const state = {
 
 const dom = {
   reportMeta: document.getElementById("reportMeta"),
-  exportXlsx: document.getElementById("exportXlsx"),
+  exportCsv: document.getElementById("exportCsv"),
   exportReport: document.getElementById("exportReport"),
   repoInfoList: document.getElementById("repoInfoList"),
   authorChoices: document.getElementById("authorChoices"),
@@ -427,6 +427,14 @@ function createNumberCell(ref, value, styleIndex = 0) {
   return `<c r="${ref}" s="${styleIndex}"><v>${value}</v></c>`
 }
 
+function createEmptyCell(ref, styleIndex = 0) {
+  return `<c r="${ref}" s="${styleIndex}"/>`
+}
+
+function createPercentCell(ref, value, styleIndex = 0) {
+  return `<c r="${ref}" s="${styleIndex}"><v>${value}</v></c>`
+}
+
 function buildProjectExportRows(commits) {
   const rows = new Map()
   commits.forEach((commit) => {
@@ -461,34 +469,71 @@ function buildProjectExportRows(commits) {
     }))
 }
 
-function buildXlsxSheetXml(commits) {
+function buildAuthorExportRows(commits) {
+  const rowMap = new Map()
   const { startDate, endDate } = getCurrentFilterRange()
-  const filterRangeText = `${startDate} 至 ${endDate}`
-  const generatedAtText = state.data.generated_at
+  const pullRequests = state.data.pull_requests || []
+
+  commits.forEach((commit) => {
+    const key = `${commit.project}@@${commit.author}`
+    if (!rowMap.has(key)) {
+      rowMap.set(key, {
+        project: commit.project,
+        author: commit.author,
+        totalLines: 0,
+        added: 0,
+        deleted: 0,
+        commitCount: 0,
+      })
+    }
+    const row = rowMap.get(key)
+    row.totalLines += commit.added + commit.deleted
+    row.added += commit.added
+    row.deleted += commit.deleted
+    row.commitCount += 1
+  })
+
+  return [...rowMap.values()]
+    .map((row) => {
+      const submittedPrs = pullRequests.filter(
+        (pr) => pr.project === row.project && pr.author === row.author && pr.created_at.slice(0, 10) >= startDate && pr.created_at.slice(0, 10) <= endDate
+      )
+      const mergedPrCount = submittedPrs.filter((pr) => pr.merged_at).length
+      const submittedMrCount = submittedPrs.length
+      return {
+        ...row,
+        reviewPassRate: submittedMrCount ? mergedPrCount / submittedMrCount : null,
+      }
+    })
+    .sort((a, b) => b.totalLines - a.totalLines || a.author.localeCompare(b.author, "zh-CN"))
+}
+
+function buildProjectSheetXml(commits) {
+  const { startDate, endDate } = getCurrentFilterRange()
   const projectRows = buildProjectExportRows(commits)
-  const totalRows = Math.max(projectRows.length, 8)
+  const totalRows = Math.max(projectRows.length, 2)
   const sheetRows = []
 
   sheetRows.push(
     `<row r="1">${[
-      createInlineStringCell("A1", "时间", 1),
-      createInlineStringCell("B1", filterRangeText, 1),
-      `<c r="C1" s="1"/>`,
-      `<c r="D1" s="1"/>`,
-      createInlineStringCell("E1", "报告输出时间", 1),
-      createInlineStringCell("F1", generatedAtText, 1),
-      `<c r="G1" s="1"/>`,
+      createInlineStringCell("A1", "时间：", 6),
+      createInlineStringCell("B1", "开始时间", 7),
+      createInlineStringCell("C1", startDate, 8),
+      createInlineStringCell("D1", "结束时间", 7),
+      createInlineStringCell("E1", endDate, 8),
+      createEmptyCell("F1", 8),
+      createEmptyCell("G1", 8),
     ].join("")}</row>`
   )
   sheetRows.push(
     `<row r="2">${[
       createInlineStringCell("A2", "项目代码情况", 2),
-      `<c r="B2" s="2"/>`,
-      `<c r="C2" s="2"/>`,
-      `<c r="D2" s="2"/>`,
+      createEmptyCell("B2", 2),
+      createEmptyCell("C2", 2),
+      createEmptyCell("D2", 2),
       createInlineStringCell("E2", "人均生产力", 2),
-      `<c r="F2" s="2"/>`,
-      `<c r="G2" s="2"/>`,
+      createEmptyCell("F2", 2),
+      createEmptyCell("G2", 2),
     ].join("")}</row>`
   )
   sheetRows.push(
@@ -508,13 +553,13 @@ function buildXlsxSheetXml(commits) {
     const row = projectRows[index]
     sheetRows.push(
       `<row r="${rowNumber}">${[
-        createInlineStringCell(`A${rowNumber}`, row ? row.project : "", 4),
-        row ? createNumberCell(`B${rowNumber}`, row.totalLines, 4) : `<c r="B${rowNumber}" s="4"/>`,
-        row ? createNumberCell(`C${rowNumber}`, row.added, 4) : `<c r="C${rowNumber}" s="4"/>`,
-        row ? createNumberCell(`D${rowNumber}`, row.deleted, 4) : `<c r="D${rowNumber}" s="4"/>`,
-        row ? createNumberCell(`E${rowNumber}`, row.commitCount, 4) : `<c r="E${rowNumber}" s="4"/>`,
-        row ? createNumberCell(`F${rowNumber}`, row.authorCount, 4) : `<c r="F${rowNumber}" s="4"/>`,
-        row ? createNumberCell(`G${rowNumber}`, row.perAuthorLines, 4) : `<c r="G${rowNumber}" s="4"/>`,
+        createInlineStringCell(`A${rowNumber}`, row ? row.project : "", 2),
+        row ? createNumberCell(`B${rowNumber}`, row.totalLines, 2) : createEmptyCell(`B${rowNumber}`, 2),
+        row ? createNumberCell(`C${rowNumber}`, row.added, 2) : createEmptyCell(`C${rowNumber}`, 2),
+        row ? createNumberCell(`D${rowNumber}`, row.deleted, 2) : createEmptyCell(`D${rowNumber}`, 2),
+        row ? createNumberCell(`E${rowNumber}`, row.totalLines, 2) : createEmptyCell(`E${rowNumber}`, 2),
+        row ? createNumberCell(`F${rowNumber}`, row.commitCount, 2) : createEmptyCell(`F${rowNumber}`, 2),
+        row ? createNumberCell(`G${rowNumber}`, row.perAuthorLines, 2) : createEmptyCell(`G${rowNumber}`, 2),
       ].join("")}</row>`
     )
   }
@@ -545,9 +590,85 @@ function buildXlsxSheetXml(commits) {
 </worksheet>`
 }
 
+function buildAuthorSheetXml(commits) {
+  const { startDate, endDate } = getCurrentFilterRange()
+  const authorRows = buildAuthorExportRows(commits)
+  const totalRows = Math.max(authorRows.length, 1)
+  const sheetRows = []
+
+  sheetRows.push(
+    `<row r="1">${[
+      createInlineStringCell("A1", "时间：", 6),
+      createInlineStringCell("B1", "开始时间", 7),
+      createInlineStringCell("C1", startDate, 8),
+      createInlineStringCell("D1", "结束时间", 7),
+      createInlineStringCell("E1", endDate, 8),
+      createEmptyCell("F1", 8),
+      createEmptyCell("G1", 8),
+    ].join("")}</row>`
+  )
+  sheetRows.push(
+    `<row r="2">${[
+      createInlineStringCell("A2", "项目名称", 3),
+      createInlineStringCell("B2", "姓名", 4),
+      createInlineStringCell("C2", "提交总代码行", 4),
+      createInlineStringCell("D2", "新增行数", 4),
+      createInlineStringCell("E2", "删除行数", 4),
+      createInlineStringCell("F2", "提交次数", 4),
+      createInlineStringCell("G2", "代码审核合格率", 5),
+    ].join("")}</row>`
+  )
+
+  for (let index = 0; index < totalRows; index += 1) {
+    const rowNumber = index + 3
+    const row = authorRows[index]
+    sheetRows.push(
+      `<row r="${rowNumber}">${[
+        createInlineStringCell(`A${rowNumber}`, row ? row.project : "", 2),
+        createInlineStringCell(`B${rowNumber}`, row ? row.author : "", 2),
+        row ? createNumberCell(`C${rowNumber}`, row.totalLines, 2) : createEmptyCell(`C${rowNumber}`, 2),
+        row ? createNumberCell(`D${rowNumber}`, row.added, 2) : createEmptyCell(`D${rowNumber}`, 2),
+        row ? createNumberCell(`E${rowNumber}`, row.deleted, 2) : createEmptyCell(`E${rowNumber}`, 2),
+        row ? createNumberCell(`F${rowNumber}`, row.commitCount, 2) : createEmptyCell(`F${rowNumber}`, 2),
+        row
+          ? row.reviewPassRate === null
+            ? createInlineStringCell(`G${rowNumber}`, "--", 2)
+            : createPercentCell(`G${rowNumber}`, row.reviewPassRate, 9)
+          : createEmptyCell(`G${rowNumber}`, 2),
+      ].join("")}</row>`
+    )
+  }
+
+  const lastRow = totalRows + 2
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:G${lastRow}"/>
+  <sheetViews>
+    <sheetView workbookViewId="0"/>
+  </sheetViews>
+  <sheetFormatPr defaultRowHeight="18"/>
+  <cols>
+    <col min="1" max="1" width="14" customWidth="1"/>
+    <col min="2" max="2" width="14" customWidth="1"/>
+    <col min="3" max="3" width="16" customWidth="1"/>
+    <col min="4" max="4" width="16" customWidth="1"/>
+    <col min="5" max="5" width="14" customWidth="1"/>
+    <col min="6" max="6" width="14.9" customWidth="1"/>
+    <col min="7" max="7" width="20.3" customWidth="1"/>
+  </cols>
+  <sheetData>
+    ${sheetRows.join("")}
+  </sheetData>
+  <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+</worksheet>`
+}
+
 function buildXlsxStylesXml() {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="1">
+    <numFmt numFmtId="164" formatCode="0.00%"/>
+  </numFmts>
   <fonts count="2">
     <font><sz val="11"/><name val="微软雅黑"/></font>
     <font><b/><sz val="11"/><name val="微软雅黑"/></font>
@@ -571,12 +692,17 @@ function buildXlsxStylesXml() {
   <cellStyleXfs count="1">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
   </cellStyleXfs>
-  <cellXfs count="5">
+  <cellXfs count="10">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
     <xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
     <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
     <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
   </cellXfs>
   <cellStyles count="1">
     <cellStyle name="常规" xfId="0" builtinId="0"/>
@@ -595,6 +721,7 @@ function buildXlsxFiles(commits) {
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
@@ -614,8 +741,8 @@ function buildXlsxFiles(commits) {
       content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
   <Application>git-workload-report</Application>
-  <HeadingPairs><vt:vector size="2" baseType="variant"><vt:variant><vt:lpstr>工作表</vt:lpstr></vt:variant><vt:variant><vt:i4>1</vt:i4></vt:variant></vt:vector></HeadingPairs>
-  <TitlesOfParts><vt:vector size="1" baseType="lpstr"><vt:lpstr>Sheet1</vt:lpstr></vt:vector></TitlesOfParts>
+  <HeadingPairs><vt:vector size="2" baseType="variant"><vt:variant><vt:lpstr>工作表</vt:lpstr></vt:variant><vt:variant><vt:i4>2</vt:i4></vt:variant></vt:vector></HeadingPairs>
+  <TitlesOfParts><vt:vector size="2" baseType="lpstr"><vt:lpstr>Sheet1</vt:lpstr><vt:lpstr>Sheet2</vt:lpstr></vt:vector></TitlesOfParts>
 </Properties>`,
     },
     {
@@ -634,6 +761,7 @@ function buildXlsxFiles(commits) {
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
     <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheet name="Sheet2" sheetId="2" r:id="rId2"/>
   </sheets>
 </workbook>`,
     },
@@ -642,11 +770,13 @@ function buildXlsxFiles(commits) {
       content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`,
     },
     { name: "xl/styles.xml", content: buildXlsxStylesXml() },
-    { name: "xl/worksheets/sheet1.xml", content: buildXlsxSheetXml(commits) },
+    { name: "xl/worksheets/sheet1.xml", content: buildProjectSheetXml(commits) },
+    { name: "xl/worksheets/sheet2.xml", content: buildAuthorSheetXml(commits) },
   ]
 }
 
@@ -776,6 +906,49 @@ function buildTimestampFileName(prefix, extension) {
   return `${prefix}_${year}${month}${day}${hours}${minutes}.${extension}`
 }
 
+function escapeCsvValue(value) {
+  const text = value == null ? "" : String(value)
+  if (/[",\r\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`
+  }
+  return text
+}
+
+function buildExportCsv(commits) {
+  const { startDate, endDate } = getCurrentFilterRange()
+  const projectRows = buildProjectExportRows(commits)
+  const authorRows = buildAuthorExportRows(commits)
+  const lines = []
+
+  const pushRow = (values) => {
+    lines.push(values.map(escapeCsvValue).join(","))
+  }
+
+  pushRow(["统计维度", "开始时间", startDate, "结束时间", endDate])
+  pushRow([])
+  pushRow(["项目维度"])
+  pushRow(["项目名称", "代码总行数", "新增行数", "删除行数", "提交代码总行数", "提交次数", "人均代码行数"])
+  projectRows.forEach((row) => {
+    pushRow([row.project, row.totalLines, row.added, row.deleted, row.totalLines, row.commitCount, row.perAuthorLines])
+  })
+  pushRow([])
+  pushRow(["人员维度"])
+  pushRow(["项目名称", "姓名", "提交总代码行", "新增行数", "删除行数", "提交次数", "代码审核合格率"])
+  authorRows.forEach((row) => {
+    pushRow([
+      row.project,
+      row.author,
+      row.totalLines,
+      row.added,
+      row.deleted,
+      row.commitCount,
+      row.reviewPassRate === null ? "--" : `${(row.reviewPassRate * 100).toFixed(2)}%`,
+    ])
+  })
+
+  return `\uFEFF${lines.join("\r\n")}`
+}
+
 /**
  * 导出的 txt 必须只使用当前页面筛选后的 commits。
  * 用户在页面上勾选仓库、开发者和时间段后，看到的结果必须和导出的结果保持一致。
@@ -840,11 +1013,11 @@ function exportReportText() {
   downloadBlob(blob, `git-workload-report-${startDate}_${endDate}.txt`)
 }
 
-function exportReportXlsx() {
+function exportReportCsv() {
   const commits = getFilteredCommits()
-  const files = buildXlsxFiles(commits)
-  const blob = createStoredZip(files)
-  downloadBlob(blob, buildTimestampFileName("output", "xlsx"))
+  const csv = buildExportCsv(commits)
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
+  downloadBlob(blob, buildTimestampFileName("output", "csv"))
 }
 
 function render() {
@@ -873,7 +1046,7 @@ async function bootstrap() {
   applyPeriod(state.period)
   bindChoices(dom.repoInfoList, state.selectedProjects)
   bindChoices(dom.authorChoices, state.selectedAuthors)
-  dom.exportXlsx.addEventListener("click", exportReportXlsx)
+  dom.exportCsv.addEventListener("click", exportReportCsv)
   dom.exportReport.addEventListener("click", exportReportText)
   dom.periodChoices.addEventListener("click", (event) => {
     const button = event.target
