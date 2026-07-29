@@ -27,6 +27,12 @@
       <section class="panel filter-panel">
         <div class="filter-block">
           <label>仓库信息</label>
+          <div class="repo-toolbar">
+            <label class="repo-master"><input type="checkbox" id="repoMaster" /> 全选</label>
+            <span class="repo-selected-count" id="repoSelectedCount">已选 0 / 共 0</span>
+            <button type="button" class="repo-action" id="repoClearAll">清空</button>
+            <button type="button" class="repo-action" id="repoInvert">反选</button>
+          </div>
           <div class="repo-info-list" id="repoInfoList"></div>
         </div>
 

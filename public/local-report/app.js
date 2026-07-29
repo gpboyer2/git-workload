@@ -33,6 +33,10 @@ const dom = {
   exportCsv: document.getElementById("exportCsv"),
   exportReport: document.getElementById("exportReport"),
   repoInfoList: document.getElementById("repoInfoList"),
+  repoMaster: document.getElementById("repoMaster"),
+  repoSelectedCount: document.getElementById("repoSelectedCount"),
+  repoClearAll: document.getElementById("repoClearAll"),
+  repoInvert: document.getElementById("repoInvert"),
   authorChoices: document.getElementById("authorChoices"),
   periodChoices: document.getElementById("periodChoices"),
   dateRangeLabel: document.getElementById("dateRangeLabel"),
@@ -125,8 +129,26 @@ function renderChoices(container, values, selectedSet) {
   })
 }
 
+let repoStatsCache = null
+function getRepoStats() {
+  if (repoStatsCache) return repoStatsCache
+  const map = new Map()
+  for (const commit of state.data.commits) {
+    let entry = map.get(commit.project)
+    if (!entry) {
+      entry = { commits: 0, last: "" }
+      map.set(commit.project, entry)
+    }
+    entry.commits += 1
+    if (commit.date > entry.last) entry.last = commit.date
+  }
+  repoStatsCache = map
+  return map
+}
+
 function renderRepoInfo() {
   dom.repoInfoList.textContent = ""
+  const stats = getRepoStats()
   state.data.repos.forEach((repo) => {
     const item = document.createElement("label")
     const input = document.createElement("input")
@@ -135,21 +157,46 @@ function renderRepoInfo() {
     const meta = document.createElement("div")
     const branch = document.createElement("span")
     const path = document.createElement("span")
+    const stat = document.createElement("span")
     item.className = "repo-info-item"
     input.type = "checkbox"
     input.value = repo.name
     input.checked = state.selectedProjects.has(repo.name)
+    if (input.checked) item.classList.add("selected")
     content.className = "repo-info-content"
     name.className = "repo-info-name"
     meta.className = "repo-info-meta"
     name.textContent = repo.name
     branch.textContent = `分支：${repo.branch}`
     path.textContent = repo.path
-    meta.append(branch, path)
+    const s = stats.get(repo.name)
+    stat.className = "repo-stat"
+    stat.textContent = s ? `提交 ${s.commits} 次 · 最近 ${s.last || "无"}` : "无提交"
+    meta.append(branch, path, stat)
     content.append(name, meta)
     item.append(input, content)
     dom.repoInfoList.append(item)
   })
+}
+
+// 同步仓库栏的勾选状态、选中高亮、计数与全选框，避免点击后视觉不更新
+function syncRepoInfo() {
+  const total = state.data.repos.length
+  const items = dom.repoInfoList.querySelectorAll(".repo-info-item")
+  items.forEach((item) => {
+    const input = item.querySelector('input[type="checkbox"]')
+    if (!input) return
+    const checked = state.selectedProjects.has(input.value)
+    input.checked = checked
+    item.classList.toggle("selected", checked)
+  })
+  const selected = state.selectedProjects.size
+  if (dom.repoSelectedCount) dom.repoSelectedCount.textContent = `已选 ${selected} / 共 ${total}`
+  const master = dom.repoMaster
+  if (master) {
+    master.checked = selected > 0 && selected === total
+    master.indeterminate = selected > 0 && selected < total
+  }
 }
 
 function renderPeriodChoices() {
@@ -188,7 +235,7 @@ function getCommitsForAuthorChoices() {
   return state.data.commits.filter((commit) => {
     if (startDate && commit.date < startDate) return false
     if (endDate && commit.date > endDate) return false
-    if (state.selectedProjects.size > 0 && !state.selectedProjects.has(commit.project)) return false
+    if (!state.selectedProjects.has(commit.project)) return false
     return true
   })
 }
@@ -245,7 +292,7 @@ function getFilteredCommits() {
   return state.data.commits.filter((commit) => {
     if (startDate && commit.date < startDate) return false
     if (endDate && commit.date > endDate) return false
-    if (state.selectedProjects.size > 0 && !state.selectedProjects.has(commit.project)) return false
+    if (!state.selectedProjects.has(commit.project)) return false
     if (state.selectedAuthors.size > 0 && !state.selectedAuthors.has(commit.author)) return false
     return true
   })
@@ -505,8 +552,8 @@ function buildMetrics(commits) {
 
   const authorCounts = groupCount(commits, "author").sort((a, b) => b.count - a.count)
   const totalN = commits.length
-  const top1 = authorCounts.length ? (authorCounts[0].count / totalN) * 100 : 0
-  const top2 = authorCounts.slice(0, 2).reduce((s, a) => s + a.count, 0) / totalN * 100
+  const top1 = authorCounts.length ? (authorCounts[0].count / (totalN || 1)) * 100 : 0
+  const top2 = authorCounts.slice(0, 2).reduce((s, a) => s + a.count, 0) / (totalN || 1) * 100
   const giniVal = gini(authorCounts.map((a) => a.count))
   let bus = 0
   let cum = 0
@@ -534,14 +581,14 @@ function buildMetrics(commits) {
   commits.forEach((c) => {
     cat[classifySubject(c.subject)] += 1
   })
-  const bugRatio = (cat.bug / totalN) * 100
-  const refactorRatio = (cat.refactor / totalN) * 100
-  const otherRatio = (cat.other / totalN) * 100
+  const bugRatio = (cat.bug / (totalN || 1)) * 100
+  const refactorRatio = (cat.refactor / (totalN || 1)) * 100
+  const otherRatio = (cat.other / (totalN || 1)) * 100
 
   const mergeCommits = commits.filter((c) => c.is_merge || (c.subject || "").toLowerCase().startsWith("merge")).length
   const botCommits = commits.filter((c) => /bot|\[bot\]|ci|jenkins|github-actions|automation|runner/i.test(c.author + c.email)).length
-  const avgSubjectLen = commits.reduce((s, c) => s + Array.from(c.subject || "").length, 0) / totalN
-  const avgSubjectWords = commits.reduce((s, c) => s + (c.subject || "").split(/\s+/).filter(Boolean).length, 0) / totalN
+  const avgSubjectLen = commits.reduce((s, c) => s + Array.from(c.subject || "").length, 0) / (totalN || 1)
+  const avgSubjectWords = commits.reduce((s, c) => s + (c.subject || "").split(/\s+/).filter(Boolean).length, 0) / (totalN || 1)
 
   const authorMetrics = authorCounts.map(({ label: author, count }) => {
     const ac = commits.filter((c) => c.author === author)
@@ -560,7 +607,7 @@ function buildMetrics(commits) {
     return {
       author,
       commits: count,
-      commit_ratio: (count / totalN) * 100,
+      commit_ratio: (count / (totalN || 1)) * 100,
       added: aAdded,
       deleted: aDeleted,
       active_days: aActive,
@@ -617,7 +664,7 @@ function buildMetrics(commits) {
   })
   const mergeAnalysis = {
     total_merges: merges.length,
-    merge_ratio: (merges.length / totalN) * 100,
+    merge_ratio: (merges.length / (totalN || 1)) * 100,
     pr_merges: prMergeCount,
     branch_merges: merges.length - prMergeCount,
     merge_by_author: sortedCountList(mergeAuthorCounts, "author", 10),
@@ -658,7 +705,7 @@ function buildMetrics(commits) {
   })
   const revertAnalysis = {
     revert_commits: reverts.length,
-    revert_ratio: (reverts.length / totalN) * 100,
+    revert_ratio: (reverts.length / (totalN || 1)) * 100,
     revert_by_author: sortedCountList(revertAuthorCounts, "author", 10),
     reverted_authors: sortedCountList(revertedAuthorCounts, "author", 10),
     bug_prone_files: sortedCountList(bugProneCounts, "file", 10),
@@ -676,7 +723,7 @@ function buildMetrics(commits) {
   const typeDistribution = COMMIT_TYPE_ORDER.filter((t) => typeCounts[t]).map((t) => ({
     type: t,
     count: typeCounts[t],
-    ratio: (typeCounts[t] / totalN) * 100,
+    ratio: (typeCounts[t] / (totalN || 1)) * 100,
   }))
   const typesByAuthor = authorCounts.map(({ label: author }) => {
     const row = { author }
@@ -776,13 +823,13 @@ function buildMetrics(commits) {
     },
     time_health: {
       night_commits: nightCommits,
-      night_ratio: (nightCommits / totalN) * 100,
+      night_ratio: (nightCommits / (totalN || 1)) * 100,
       weekend_commits: weekendCommits,
-      weekend_ratio: (weekendCommits / totalN) * 100,
+      weekend_ratio: (weekendCommits / (totalN || 1)) * 100,
       worktime_commits: worktimeCommits,
-      worktime_ratio: (worktimeCommits / totalN) * 100,
+      worktime_ratio: (worktimeCommits / (totalN || 1)) * 100,
       offhours_commits: offhoursCommits,
-      offhours_ratio: (offhoursCommits / totalN) * 100,
+      offhours_ratio: (offhoursCommits / (totalN || 1)) * 100,
     },
     work_categories: {
       bug_fix_commits: cat.bug,
@@ -794,7 +841,7 @@ function buildMetrics(commits) {
     },
     commit_quality: {
       merge_commits: mergeCommits,
-      merge_ratio: (mergeCommits / totalN) * 100,
+      merge_ratio: (mergeCommits / (totalN || 1)) * 100,
       bot_commits: botCommits,
       avg_subject_length: avgSubjectLen,
       avg_subject_words: avgSubjectWords,
@@ -821,7 +868,7 @@ function buildSummary(commits) {
   const overtimeRatio = weeklyHours ? (overtimeHours / weeklyHours) * 100 : 0
 
   return {
-    repoCount: state.selectedProjects.size || state.data.repos.length,
+    repoCount: state.selectedProjects.size,
     activeProjectCount: uniqueCount(commits, (item) => item.project),
     added,
     deleted,
@@ -1854,6 +1901,7 @@ function renderBranchPanel() {
 
 function render() {
   syncAuthorChoices()
+  syncRepoInfo()
   const commits = getFilteredCommits()
   const summary = buildSummary(commits)
   renderSummary(commits)
@@ -1878,7 +1926,10 @@ function render() {
   renderTypeChart(metrics)
   renderOwnershipPanel(metrics)
   renderBranchPanel()
-  dom.reportMeta.textContent = `本地生成时间：${state.data.generated_at}，当前选中 ${summary.repoCount} 个仓库，其中 ${summary.activeProjectCount} 个仓库有提交，包含 ${uniqueCount(commits, (item) => item.author)} 位开发者。`
+  const repoPart = state.selectedProjects.size === 0
+    ? `未选择仓库（当前结果为空）`
+    : `当前选中 ${summary.repoCount} 个仓库`
+  dom.reportMeta.textContent = `本地生成时间：${state.data.generated_at}，${repoPart}，其中 ${summary.activeProjectCount} 个仓库有提交，包含 ${uniqueCount(commits, (item) => item.author)} 位开发者。`
 }
 
 async function bootstrap() {
@@ -1890,6 +1941,25 @@ async function bootstrap() {
   applyPeriod(state.period)
   bindChoices(dom.repoInfoList, state.selectedProjects)
   bindChoices(dom.authorChoices, state.selectedAuthors)
+  dom.repoMaster.addEventListener("change", () => {
+    if (dom.repoMaster.checked) {
+      state.data.repos.forEach((repo) => state.selectedProjects.add(repo.name))
+    } else {
+      state.selectedProjects.clear()
+    }
+    render()
+  })
+  dom.repoClearAll.addEventListener("click", () => {
+    state.selectedProjects.clear()
+    render()
+  })
+  dom.repoInvert.addEventListener("click", () => {
+    state.data.repos.forEach((repo) => {
+      if (state.selectedProjects.has(repo.name)) state.selectedProjects.delete(repo.name)
+      else state.selectedProjects.add(repo.name)
+    })
+    render()
+  })
   dom.exportCsv.addEventListener("click", exportReportCsv)
   dom.exportReport.addEventListener("click", exportReportText)
   dom.periodChoices.addEventListener("click", (event) => {
