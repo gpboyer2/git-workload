@@ -171,7 +171,8 @@ fi
 
 if [ -z "$time_start" ]
 then
-    time_start=$(date -d "$(date "+%Y-%m-%d") -6 day" "+%Y-%m-%d")
+    # GNU date 用 -d，BSD/macOS date 用 -v，都失败时回退 python3 计算，保证三端可用
+    time_start=$(date -d "$(date "+%Y-%m-%d") -6 day" "+%Y-%m-%d" 2>/dev/null || date -v-6d "+%Y-%m-%d" 2>/dev/null || python3 -c 'from datetime import date, timedelta; print(date.today() - timedelta(days=6))')
 fi
 
 if [ -z "$time_end" ]
@@ -241,7 +242,8 @@ def print_progress(message):
     print(f"[进度] {message}", flush=True)
 
 def run_git(repo_path, args):
-    return subprocess.check_output(["git", "-C", repo_path, *args], text=True, stderr=subprocess.DEVNULL)
+    # -c core.quotepath=false：避免中文文件名被转义成八进制（"\346..."）
+    return subprocess.check_output(["git", "-C", repo_path, "-c", "core.quotepath=false", *args], text=True, stderr=subprocess.DEVNULL)
 
 def is_git_repo(path):
     try:
@@ -854,12 +856,118 @@ def parse_commits(repo_path):
     print_progress(f"仓库解析完成：{project_name}，提交 {len(commits)} 次")
     return commits
 
+def collect_conflict_merges(repo_path):
+    """识别真正动过手的合并：combined diff（--cc）里出现的文件 = 与所有父提交都不同 = 冲突解决/手工调整。返回 {hash: [文件...]}"""
+    try:
+        raw = run_git(repo_path, [
+            "log",
+            "--merges",
+            f"--after={collect_time_start}",
+            f"--before={collect_time_end}",
+            "--diff-merges=cc",
+            "--name-only",
+            "--pretty=format:--GW-MERGE--%n%H",
+        ])
+    except Exception:
+        return {}
+    result = {}
+    current_hash = None
+    expect_hash = False
+    for line in raw.splitlines():
+        if line.startswith("--GW-MERGE--"):
+            expect_hash = True
+            current_hash = None
+            continue
+        if expect_hash:
+            current_hash = line.strip()
+            result[current_hash] = []
+            expect_hash = False
+            continue
+        if current_hash and line.strip():
+            result[current_hash].append(line.strip())
+    return {h: files for h, files in result.items() if files}
+
+def collect_branches(repo_path):
+    """采集分支概览：本地 + 远端分支的最后提交时间、最后提交人、是否已并入 HEAD、是否僵尸（>90 天未动）。"""
+    project_name = os.path.basename(repo_path)
+    info = {
+        "project": project_name,
+        "total": 0,
+        "local": 0,
+        "remote": 0,
+        "merged": 0,
+        "unmerged": 0,
+        "stale": 0,
+        "by_author": {},
+        "categories": {},
+        "branches": [],
+    }
+    try:
+        raw = run_git(repo_path, [
+            "for-each-ref", "refs/heads", "refs/remotes",
+            "--format=%(refname:short)|%(committerdate:short)|%(authorname)",
+        ])
+    except Exception:
+        return info
+    merged_set = set()
+    try:
+        merged_raw = run_git(repo_path, ["branch", "-a", "--merged", "HEAD", "--format=%(refname:short)"])
+        merged_set = {line.strip() for line in merged_raw.splitlines() if line.strip()}
+    except Exception:
+        pass
+    today = datetime.now().date()
+    seen_names = set()
+    for line in raw.splitlines():
+        parts = line.split("|")
+        if len(parts) < 3:
+            continue
+        name, last_date, last_author = parts[0], parts[1], parts[2]
+        if name.endswith("/HEAD") or name == "HEAD":
+            continue
+        is_remote = "/" in name and name.split("/", 1)[0] in ("origin", "upstream")
+        short_name = name.split("/", 1)[1] if is_remote else name
+        # 本地与远端同名分支只记一次，优先保留本地
+        if short_name in seen_names and is_remote:
+            continue
+        seen_names.add(short_name)
+        try:
+            days_idle = (today - datetime.fromisoformat(last_date).date()).days
+        except (TypeError, ValueError):
+            days_idle = 0
+        stale = days_idle > 90
+        merged = name in merged_set
+        prefix = short_name.split("/", 1)[0].lower() if "/" in short_name else "其他"
+        if prefix not in ("feature", "feat", "fix", "bugfix", "hotfix", "release", "dev", "develop", "test", "chore"):
+            prefix = "其他"
+        info["total"] += 1
+        info["remote" if is_remote else "local"] += 1
+        info["merged" if merged else "unmerged"] += 1
+        if stale:
+            info["stale"] += 1
+        info["by_author"][last_author] = info["by_author"].get(last_author, 0) + 1
+        info["categories"][prefix] = info["categories"].get(prefix, 0) + 1
+        info["branches"].append({
+            "name": short_name,
+            "is_remote": is_remote,
+            "last_date": last_date,
+            "last_author": last_author,
+            "merged": merged,
+            "stale": stale,
+            "days_idle": days_idle,
+        })
+    info["branches"].sort(key=lambda b: b["last_date"], reverse=True)
+    info["branches"] = info["branches"][:50]
+    return info
+
 def format_number(value):
     return f"{value:,}"
 
 def date_diff_days(start_date, end_date):
-    start = datetime.fromisoformat(start_date)
-    end = datetime.fromisoformat(end_date)
+    try:
+        start = datetime.fromisoformat(start_date)
+        end = datetime.fromisoformat(end_date)
+    except (TypeError, ValueError):
+        return 1
     return max((end - start).days + 1, 1)
 
 def estimate_hours(commits):
@@ -892,6 +1000,671 @@ def print_rows(headers, rows):
     print(separator)
     for row in rows:
         print("  " + "  ".join(str(value).ljust(widths[index]) for index, value in enumerate(row)))
+
+# ===== 增量展示：综合指标计算（应给尽给，全量指标） =====
+weekday_labels = {"1": "周一", "2": "周二", "3": "周三", "4": "周四", "5": "周五", "6": "周六", "7": "周日"}
+night_hours = {"22", "23", "00", "01", "02", "03", "04"}
+worktime_hours = {"09", "10", "11", "12", "13", "14", "15", "16", "17", "18"}
+bug_keywords = ("fix", "bug", "patch", "hotfix", "resolve", "修复", "解决")
+refactor_keywords = ("refactor", "cleanup", "clean", "optimize", "optimise", "restructure", "perf", "重构", "优化", "整理")
+bot_keywords = ("bot", "[bot]", "ci", "jenkins", "github-actions", "automation", "runner")
+
+
+def commit_datetime(commit):
+    """把 date + hour 組合成 naive datetime，避免 iso 偏移解析差异。"""
+    date = commit["date"]
+    hour = int(commit["hour"])
+    return datetime(int(date[:4]), int(date[5:7]), int(date[8:10]), hour)
+
+
+def compute_streaks(dates):
+    """返回 (最长连续天数, 当前连续天数)。连续按自然日相邻判断。"""
+    if not dates:
+        return 0, 0
+    sorted_dates = sorted({datetime.fromisoformat(d) for d in dates})
+    longest = 1
+    current = 1
+    for prev, cur in zip(sorted_dates, sorted_dates[1:]):
+        if (cur - prev).days == 1:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 1
+    cur_streak = 1
+    for idx in range(len(sorted_dates) - 1, 0, -1):
+        if (sorted_dates[idx] - sorted_dates[idx - 1]).days == 1:
+            cur_streak += 1
+        else:
+            break
+    return longest, cur_streak
+
+
+def gini(values):
+    vals = sorted(values)
+    n = len(vals)
+    if n == 0 or sum(vals) == 0:
+        return 0.0
+    cum = sum(i * v for i, v in enumerate(vals, start=1))
+    total = sum(vals)
+    return (2 * cum) / (n * total) - (n + 1) / n
+
+
+def classify_subject(subject):
+    text = (subject or "").lower()
+    if any(k in text for k in bug_keywords):
+        return "bug"
+    if any(k in text for k in refactor_keywords):
+        return "refactor"
+    return "other"
+
+conventional_types = ("feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert")
+merge_branch_pattern = re.compile(r"Merge branch '([^']+)'(?:\s+into\s+(\S+))?")
+merge_pr_pattern = re.compile(r"Merge (?:pull request|PR) #?(\d+)(?:\s+from\s+(\S+))?", re.IGNORECASE)
+revert_pattern = re.compile(r'^Revert\s+"(.*)"')
+
+def classify_commit_type(commit):
+    """按 Conventional Commits 规范细分提交类型，非规范提交用关键词兜底。"""
+    subject = (commit.get("subject") or "").strip()
+    lower = subject.lower()
+    if commit.get("is_merge") or lower.startswith("merge "):
+        return "merge"
+    if lower.startswith("revert"):
+        return "revert"
+    matched = re.match(r"^([a-z]+)(\([^)]*\))?!?:", lower)
+    if matched and matched.group(1) in conventional_types:
+        return matched.group(1)
+    if any(k in lower for k in bug_keywords):
+        return "fix"
+    if any(k in lower for k in refactor_keywords):
+        return "refactor"
+    if any(k in lower for k in ("doc", "readme", "文档")):
+        return "docs"
+    if any(k in lower for k in ("test", "测试")):
+        return "test"
+    return "other"
+
+def sorted_count_list(counter, key_name, limit):
+    """{名称: 次数} → 按次数降序、名称升序取前 N，输出 [{key_name, count}]。Python/JS 需保持同一排序规则。"""
+    items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [{key_name: k, "count": v} for k, v in items[:limit]]
+
+
+def build_metrics(commits):
+    """全量计算工作量指标，返回结构化 dict。无提交时返回空骨架。"""
+    empty = {
+        "time_span": {},
+        "cadence": {},
+        "monthly_trend": [],
+        "code_changes": {"top_files": []},
+        "concentration": {},
+        "time_health": {},
+        "work_categories": {},
+        "commit_quality": {},
+        "merge_analysis": {},
+        "revert_analysis": {},
+        "commit_types": {},
+        "ownership": {},
+        "authors": [],
+        "projects": [],
+    }
+    if not commits:
+        return empty
+
+    dates = [c["date"] for c in commits]
+    first_date = min(dates)
+    last_date = max(dates)
+    span_days = date_diff_days(first_date, last_date)
+    active_day_set = set(dates)
+    active_days = len(active_day_set)
+    active_day_ratio = active_days / span_days * 100 if span_days else 0
+
+    by_day = {}
+    for c in commits:
+        by_day.setdefault(c["date"], 0)
+        by_day[c["date"]] += 1
+    max_day_count = max(by_day.values())
+    peak_day_date = [d for d, n in by_day.items() if n == max_day_count][0]
+    avg_per_active_day = len(commits) / active_days if active_days else 0
+    commit_spike = (max_day_count / avg_per_active_day - 1) if avg_per_active_day else 0
+    longest_streak, current_streak = compute_streaks(dates)
+
+    sorted_by_time = sorted(commits, key=lambda c: c["time"])
+    intervals = []
+    for a, b in zip(sorted_by_time, sorted_by_time[1:]):
+        delta = (commit_datetime(b) - commit_datetime(a)).total_seconds() / 60.0
+        if delta >= 0:
+            intervals.append(delta)
+    avg_interval = sum(intervals) / len(intervals) if intervals else 0
+
+    week_counts = group_count(commits, "week_day", list(weekday_labels.keys()))
+    peak_weekday = max(week_counts.items(), key=lambda kv: kv[1])[0]
+    hour_counts = group_count(commits, "hour", [str(i).zfill(2) for i in range(24)])
+    peak_hour = max(hour_counts.items(), key=lambda kv: kv[1])[0]
+
+    monthly = {}
+    for c in commits:
+        month = c["date"][:7]
+        entry = monthly.setdefault(month, {"month": month, "commits": 0, "added": 0, "deleted": 0, "authors": set(), "active_days": set()})
+        entry["commits"] += 1
+        entry["added"] += c["added"]
+        entry["deleted"] += c["deleted"]
+        entry["authors"].add(c["author"])
+        entry["active_days"].add(c["date"])
+    monthly_trend = []
+    for m in sorted(monthly.keys()):
+        e = monthly[m]
+        monthly_trend.append({
+            "month": m,
+            "commits": e["commits"],
+            "added": e["added"],
+            "deleted": e["deleted"],
+            "authors": len(e["authors"]),
+            "active_days": len(e["active_days"]),
+        })
+
+    total_added = sum(c["added"] for c in commits)
+    total_deleted = sum(c["deleted"] for c in commits)
+    total_changed = total_added + total_deleted
+    avg_lines = total_changed / len(commits) if commits else 0
+    max_commit = max(commits, key=lambda c: c["added"] + c["deleted"])
+    max_total = max_commit["added"] + max_commit["deleted"]
+    total_files_changed = sum(len(c["files"]) for c in commits)
+    file_map = {}
+    for c in commits:
+        for f in c["files"]:
+            fe = file_map.setdefault(f["file"], {"file": f["file"], "changes": 0, "added": 0, "deleted": 0})
+            fe["changes"] += 1
+            fe["added"] += f["added"]
+            fe["deleted"] += f["deleted"]
+    unique_files = len(file_map)
+    top_files = sorted(file_map.values(), key=lambda x: x["changes"], reverse=True)[:10]
+    empty_commits = sum(1 for c in commits if c["added"] == 0 and c["deleted"] == 0 and not c["files"])
+    large_commits = sum(1 for c in commits if (c["added"] + c["deleted"]) > 500)
+    churn_ratio = total_deleted / total_changed * 100 if total_changed else 0
+
+    author_counts = group_count(commits, "author")
+    counts_sorted = sorted(author_counts.items(), key=lambda kv: kv[1], reverse=True)
+    total_commits_n = len(commits)
+    top1_ratio = (counts_sorted[0][1] / total_commits_n * 100) if counts_sorted else 0
+    top2_ratio = (sum(n for _, n in counts_sorted[:2]) / total_commits_n * 100) if counts_sorted else 0
+    gini_val = gini([n for _, n in counts_sorted])
+    bus_factor = 0
+    cum = 0
+    for _, n in counts_sorted:
+        cum += n
+        bus_factor += 1
+        if cum >= total_commits_n * 0.5:
+            break
+    bus_factor = bus_factor or len(counts_sorted)
+    pareto_80 = 0
+    cum = 0
+    for _, n in counts_sorted:
+        cum += n
+        pareto_80 += 1
+        if cum >= total_commits_n * 0.8:
+            break
+    pareto_80 = pareto_80 or len(counts_sorted)
+
+    night_commits = sum(1 for c in commits if c["hour"] in night_hours)
+    weekend_commits = sum(1 for c in commits if c["week_day"] in ("6", "7"))
+    worktime_commits = sum(1 for c in commits if c["hour"] in worktime_hours)
+    offhours_commits = len(commits) - worktime_commits
+
+    cat = {"bug": 0, "refactor": 0, "other": 0}
+    for c in commits:
+        cat[classify_subject(c["subject"])] += 1
+    bug_ratio = cat["bug"] / total_commits_n if total_commits_n else 0
+    refactor_ratio = cat["refactor"] / total_commits_n if total_commits_n else 0
+    other_ratio = cat["other"] / total_commits_n if total_commits_n else 0
+
+    merge_commits = sum(1 for c in commits if c.get("is_merge") or str(c.get("subject", "")).lower().startswith("merge"))
+    bot_commits = sum(1 for c in commits if any(k in (c["author"] + c["email"]).lower() for k in bot_keywords))
+    avg_subject_len = sum(len(c["subject"] or "") for c in commits) / total_commits_n if total_commits_n else 0
+    avg_subject_words = sum(len((c["subject"] or "").split()) for c in commits) / total_commits_n if total_commits_n else 0
+
+    author_metrics = []
+    for author, n in counts_sorted:
+        ac = [c for c in commits if c["author"] == author]
+        adates = [c["date"] for c in ac]
+        a_added = sum(c["added"] for c in ac)
+        a_deleted = sum(c["deleted"] for c in ac)
+        a_active = len(set(adates))
+        a_first = min(adates)
+        a_last = max(adates)
+        a_longest, a_current = compute_streaks(adates)
+        a_peak_hour_raw = max(group_count(ac, "hour", [str(i).zfill(2) for i in range(24)]).items(), key=lambda kv: kv[1])[0]
+        a_peak_hour = f"{a_peak_hour_raw}:00"
+        a_peak_wd = max(group_count(ac, "week_day", list(weekday_labels.keys())).items(), key=lambda kv: kv[1])[0]
+        a_files = len({f["file"] for c in ac for f in c["files"]})
+        author_metrics.append({
+            "author": author,
+            "commits": n,
+            "commit_ratio": n / total_commits_n * 100 if total_commits_n else 0,
+            "added": a_added,
+            "deleted": a_deleted,
+            "active_days": a_active,
+            "first_commit": a_first,
+            "last_commit": a_last,
+            "longest_streak": a_longest,
+            "current_streak": a_current,
+            "peak_hour": a_peak_hour,
+            "peak_weekday": weekday_labels.get(a_peak_wd, a_peak_wd),
+            "avg_per_active_day": n / a_active if a_active else 0,
+            "unique_files": a_files,
+        })
+
+    project_metrics = []
+    for project in sorted({c["project"] for c in commits}):
+        pc = [c for c in commits if c["project"] == project]
+        project_metrics.append({
+            "project": project,
+            "commits": len(pc),
+            "added": sum(c["added"] for c in pc),
+            "deleted": sum(c["deleted"] for c in pc),
+            "authors": len({c["author"] for c in pc}),
+            "active_days": len({c["date"] for c in pc}),
+        })
+
+    # ===== 合并分析：谁做的合并、来源分支、谁解决的冲突、冲突热点文件 =====
+    merges = [c for c in commits if c.get("is_merge")]
+    merge_author_counts = {}
+    merge_source_counts = {}
+    pr_merge_count = 0
+    for c in merges:
+        merge_author_counts[c["author"]] = merge_author_counts.get(c["author"], 0) + 1
+        subject = c.get("subject") or ""
+        pr_match = merge_pr_pattern.search(subject)
+        if pr_match:
+            pr_merge_count += 1
+            if pr_match.group(2):
+                merge_source_counts[pr_match.group(2)] = merge_source_counts.get(pr_match.group(2), 0) + 1
+            continue
+        br_match = merge_branch_pattern.search(subject)
+        if br_match:
+            merge_source_counts[br_match.group(1)] = merge_source_counts.get(br_match.group(1), 0) + 1
+    conflict_merges = [c for c in merges if c.get("conflict_files")]
+    conflict_resolver_counts = {}
+    conflict_file_counts = {}
+    for c in conflict_merges:
+        conflict_resolver_counts[c["author"]] = conflict_resolver_counts.get(c["author"], 0) + 1
+        for name in c.get("conflict_files") or []:
+            conflict_file_counts[name] = conflict_file_counts.get(name, 0) + 1
+    merge_analysis = {
+        "total_merges": len(merges),
+        "merge_ratio": len(merges) / total_commits_n * 100 if total_commits_n else 0,
+        "pr_merges": pr_merge_count,
+        "branch_merges": len(merges) - pr_merge_count,
+        "merge_by_author": sorted_count_list(merge_author_counts, "author", 10),
+        "merge_sources": sorted_count_list(merge_source_counts, "branch", 10),
+        "conflict_merges": len(conflict_merges),
+        "conflict_ratio": len(conflict_merges) / len(merges) * 100 if merges else 0,
+        "conflict_resolvers": sorted_count_list(conflict_resolver_counts, "author", 10),
+        "conflict_files": sorted_count_list(conflict_file_counts, "file", 10),
+    }
+
+    # ===== 问题溯源：谁在回滚救火、谁的提交被回滚、Bug 高发文件 =====
+    reverts = []
+    revert_author_counts = {}
+    subject_author_index = {}
+    for c in commits:
+        subj = (c.get("subject") or "").strip()
+        if not revert_pattern.match(subj) and subj not in subject_author_index:
+            subject_author_index[subj] = c["author"]
+    for c in commits:
+        matched = revert_pattern.match((c.get("subject") or "").strip())
+        if matched:
+            reverts.append((c, matched.group(1)))
+            revert_author_counts[c["author"]] = revert_author_counts.get(c["author"], 0) + 1
+    reverted_author_counts = {}
+    for _, orig_subject in reverts:
+        orig_author = subject_author_index.get(orig_subject.strip())
+        if orig_author:
+            reverted_author_counts[orig_author] = reverted_author_counts.get(orig_author, 0) + 1
+    bug_prone_counts = {}
+    for c in commits:
+        if classify_subject(c.get("subject")) == "bug":
+            for f in c["files"]:
+                bug_prone_counts[f["file"]] = bug_prone_counts.get(f["file"], 0) + 1
+    revert_analysis = {
+        "revert_commits": len(reverts),
+        "revert_ratio": len(reverts) / total_commits_n * 100 if total_commits_n else 0,
+        "revert_by_author": sorted_count_list(revert_author_counts, "author", 10),
+        "reverted_authors": sorted_count_list(reverted_author_counts, "author", 10),
+        "bug_prone_files": sorted_count_list(bug_prone_counts, "file", 10),
+    }
+
+    # ===== 提交类型细分（Conventional Commits）=====
+    type_order = ["feat", "fix", "refactor", "docs", "test", "style", "perf", "build", "ci", "chore", "revert", "merge", "other"]
+    type_counts = {}
+    author_type_counts = {}
+    for c in commits:
+        c_type = classify_commit_type(c)
+        type_counts[c_type] = type_counts.get(c_type, 0) + 1
+        author_type_counts.setdefault(c["author"], {})
+        author_type_counts[c["author"]][c_type] = author_type_counts[c["author"]].get(c_type, 0) + 1
+    type_distribution = [
+        {"type": t, "count": type_counts[t], "ratio": type_counts[t] / total_commits_n * 100 if total_commits_n else 0}
+        for t in type_order if type_counts.get(t)
+    ]
+    types_by_author = []
+    for author, _n in counts_sorted:
+        row = {"author": author}
+        for t in type_order:
+            row[t] = author_type_counts.get(author, {}).get(t, 0)
+        types_by_author.append(row)
+    commit_types = {
+        "distribution": type_distribution,
+        "by_author": types_by_author,
+    }
+
+    # ===== 文件所有权与协作：主要负责人、知识孤岛、协作对 =====
+    file_author_commits = {}
+    for c in commits:
+        for f in c["files"]:
+            file_author_commits.setdefault(f["file"], {})
+            file_author_commits[f["file"]][c["author"]] = file_author_commits[f["file"]].get(c["author"], 0) + 1
+    total_tracked_files = len(file_author_commits)
+    single_owner_files = sum(1 for amap in file_author_commits.values() if len(amap) == 1)
+    shared_files = total_tracked_files - single_owner_files
+    file_owners = []
+    for entry in top_files:
+        amap = file_author_commits.get(entry["file"], {})
+        if not amap:
+            continue
+        owner, owner_n = sorted(amap.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+        file_total = sum(amap.values())
+        file_owners.append({
+            "file": entry["file"],
+            "owner": owner,
+            "owner_commits": owner_n,
+            "total_commits": file_total,
+            "owner_ratio": owner_n / file_total * 100 if file_total else 0,
+            "author_count": len(amap),
+        })
+    pair_counts = {}
+    for amap in file_author_commits.values():
+        authors_sorted = sorted(amap.keys())
+        if len(authors_sorted) < 2:
+            continue
+        for i in range(len(authors_sorted)):
+            for j in range(i + 1, len(authors_sorted)):
+                key = f"{authors_sorted[i]} ↔ {authors_sorted[j]}"
+                pair_counts[key] = pair_counts.get(key, 0) + 1
+    ownership = {
+        "total_files": total_tracked_files,
+        "single_owner_files": single_owner_files,
+        "single_owner_ratio": single_owner_files / total_tracked_files * 100 if total_tracked_files else 0,
+        "shared_files": shared_files,
+        "file_owners": file_owners,
+        "collaboration_pairs": sorted_count_list(pair_counts, "pair", 5),
+    }
+
+    return {
+        "time_span": {
+            "first_commit_date": first_date,
+            "last_commit_date": last_date,
+            "span_days": span_days,
+            "active_days": active_days,
+            "active_day_ratio": active_day_ratio,
+        },
+        "cadence": {
+            "avg_commits_per_active_day": avg_per_active_day,
+            "max_commits_in_one_day": max_day_count,
+            "peak_day_date": peak_day_date,
+            "commit_spike": commit_spike,
+            "longest_streak": longest_streak,
+            "current_streak": current_streak,
+            "avg_interval_minutes": avg_interval,
+            "peak_weekday": weekday_labels.get(peak_weekday, peak_weekday),
+            "peak_hour": f"{peak_hour}:00",
+        },
+        "monthly_trend": monthly_trend,
+        "code_changes": {
+            "avg_lines_per_commit": avg_lines,
+            "max_commit_added": max_commit["added"],
+            "max_commit_deleted": max_commit["deleted"],
+            "max_commit_total": max_total,
+            "max_commit_author": max_commit["author"],
+            "max_commit_date": max_commit["date"],
+            "max_commit_subject": max_commit["subject"],
+            "total_files_changed": total_files_changed,
+            "unique_files": unique_files,
+            "empty_commits": empty_commits,
+            "large_commits": large_commits,
+            "churn_ratio": churn_ratio,
+            "top_files": top_files,
+        },
+        "concentration": {
+            "top1_ratio": top1_ratio,
+            "top2_ratio": top2_ratio,
+            "gini": gini_val,
+            "bus_factor": bus_factor,
+            "pareto_80": pareto_80,
+        },
+        "time_health": {
+            "night_commits": night_commits,
+            "night_ratio": night_commits / total_commits_n * 100 if total_commits_n else 0,
+            "weekend_commits": weekend_commits,
+            "weekend_ratio": weekend_commits / total_commits_n * 100 if total_commits_n else 0,
+            "worktime_commits": worktime_commits,
+            "worktime_ratio": worktime_commits / total_commits_n * 100 if total_commits_n else 0,
+            "offhours_commits": offhours_commits,
+            "offhours_ratio": offhours_commits / total_commits_n * 100 if total_commits_n else 0,
+        },
+        "work_categories": {
+            "bug_fix_commits": cat["bug"],
+            "bug_fix_ratio": bug_ratio * 100,
+            "refactor_commits": cat["refactor"],
+            "refactor_ratio": refactor_ratio * 100,
+            "other_commits": cat["other"],
+            "other_ratio": other_ratio * 100,
+        },
+        "commit_quality": {
+            "merge_commits": merge_commits,
+            "merge_ratio": merge_commits / total_commits_n * 100 if total_commits_n else 0,
+            "bot_commits": bot_commits,
+            "avg_subject_length": avg_subject_len,
+            "avg_subject_words": avg_subject_words,
+        },
+        "merge_analysis": merge_analysis,
+        "revert_analysis": revert_analysis,
+        "commit_types": commit_types,
+        "ownership": ownership,
+        "authors": author_metrics,
+        "projects": project_metrics,
+    }
+
+
+def print_branch_overview(branch_infos):
+    """打印仓库级分支概览（数据来自采集阶段，不受提交过滤影响）。"""
+    infos = [b for b in branch_infos if b.get("total")]
+    if not infos:
+        return
+    print("分支概览")
+    for info in infos:
+        print(f"  {info['project']}：共 {info['total']} 条（本地 {info['local']} / 远端 {info['remote']}）")
+        print(f"    已并入 HEAD：{info['merged']} 条 / 未并入：{info['unmerged']} 条 / 僵尸分支（>90 天未动）：{info['stale']} 条")
+        if info.get("categories"):
+            cat_parts = [f"{k} {v}" for k, v in sorted(info["categories"].items(), key=lambda kv: (-kv[1], kv[0]))]
+            print(f"    命名类别：{'，'.join(cat_parts)}")
+        if info.get("by_author"):
+            author_parts = [f"{k} {v}" for k, v in sorted(info["by_author"].items(), key=lambda kv: (-kv[1], kv[0]))[:8]]
+            print(f"    最后提交人分布：{'，'.join(author_parts)}")
+        stale_list = [b for b in info.get("branches", []) if b.get("stale")][:5]
+        if stale_list:
+            print("    最久未动分支：")
+            for b in sorted(stale_list, key=lambda x: -x["days_idle"]):
+                print(f"      {b['name']}（{b['last_author']}，{b['last_date']}，闲置 {b['days_idle']} 天）")
+    print()
+
+def print_metrics_terminal(metrics):
+    """增量打印全量指标章节（保留原有章节，仅追加新内容）。"""
+    ts = metrics.get("time_span", {})
+    cd = metrics.get("cadence", {})
+    cc = metrics.get("code_changes", {})
+    cn = metrics.get("concentration", {})
+    th = metrics.get("time_health", {})
+    wc = metrics.get("work_categories", {})
+    cq = metrics.get("commit_quality", {})
+
+    if ts:
+        print("时间跨度与活跃度")
+        print(f"  首次提交：{ts.get('first_commit_date', '-')}")
+        print(f"  最近提交：{ts.get('last_commit_date', '-')}")
+        print(f"  时间跨度：{ts.get('span_days', 0)} 天")
+        print(f"  活跃天数：{ts.get('active_days', 0)} 天")
+        print(f"  活跃密度：{ts.get('active_day_ratio', 0):.1f}%（活跃天数 / 时间跨度）")
+        print()
+
+    if cd:
+        print("提交节奏")
+        print(f"  最忙一天：{cd.get('peak_day_date', '-')}（{cd.get('max_commits_in_one_day', 0)} 次）")
+        print(f"  提交尖峰：{cd.get('commit_spike', 0):.1f}x（最忙日 vs 日均活跃日）")
+        print(f"  最长连续提交：{cd.get('longest_streak', 0)} 天")
+        print(f"  当前连续提交：{cd.get('current_streak', 0)} 天")
+        print(f"  平均提交间隔：{cd.get('avg_interval_minutes', 0):.0f} 分钟")
+        print(f"  最活跃星期：{cd.get('peak_weekday', '-')}")
+        print(f"  最活跃时段：{cd.get('peak_hour', '-')}")
+        print()
+
+    if metrics.get("monthly_trend"):
+        print("月度提交趋势")
+        trend_rows = [[m["month"], format_number(m["commits"]), format_number(m["added"]), format_number(m["deleted"]), m["authors"], m["active_days"]] for m in metrics["monthly_trend"]]
+        print_rows(["月份", "提交", "新增", "删除", "开发者", "活跃天"], trend_rows)
+        print()
+
+    if cc:
+        print("代码改动概览")
+        print(f"  平均每次提交改动：{cc.get('avg_lines_per_commit', 0):.1f} 行")
+        print(f"  最大单次提交：+{format_number(cc.get('max_commit_added', 0))} / -{format_number(cc.get('max_commit_deleted', 0))}（{cc.get('max_commit_author', '-')}，{cc.get('max_commit_date', '-')}）")
+        if cc.get("max_commit_subject"):
+            print(f"    提交说明：{cc.get('max_commit_subject')}")
+        print(f"  改动文件次数：{format_number(cc.get('total_files_changed', 0))}（去重 {format_number(cc.get('unique_files', 0))} 个文件）")
+        print(f"  大型提交（>500 行）：{cc.get('large_commits', 0)} 次")
+        print(f"  空提交（无代码改动）：{cc.get('empty_commits', 0)} 次")
+        print(f"  代码周转比：{cc.get('churn_ratio', 0):.1f}%（删除 / 总改动）")
+        print()
+
+    if cc.get("top_files"):
+        print("热点文件 Top 10（改动最频繁）")
+        file_rows = [[f["file"], format_number(f["changes"]), format_number(f["added"]), format_number(f["deleted"])] for f in cc["top_files"]]
+        print_rows(["文件", "改动次数", "新增", "删除"], file_rows)
+        print()
+
+    if cn:
+        print("开发者贡献集中度")
+        print(f"  Top 1 占比：{cn.get('top1_ratio', 0):.1f}%")
+        print(f"  Top 2 占比：{cn.get('top2_ratio', 0):.1f}%")
+        print(f"  基尼系数：{cn.get('gini', 0):.2f}（0 均衡，越接近 1 越集中）")
+        print(f"  Bus Factor：{cn.get('bus_factor', 0)} 人（贡献 50% 提交所需人数）")
+        print(f"  帕累托 80%：{cn.get('pareto_80', 0)} 人（贡献 80% 提交所需人数）")
+        print()
+
+    if th:
+        print("时间健康度")
+        print(f"  深夜提交（22:00-05:00）：{format_number(th.get('night_commits', 0))} 次（{th.get('night_ratio', 0):.1f}%）")
+        print(f"  周末提交（周六/日）：{format_number(th.get('weekend_commits', 0))} 次（{th.get('weekend_ratio', 0):.1f}%）")
+        print(f"  工作时间（09:00-18:00）：{format_number(th.get('worktime_commits', 0))} 次（{th.get('worktime_ratio', 0):.1f}%）")
+        print(f"  非工作时间：{format_number(th.get('offhours_commits', 0))} 次（{th.get('offhours_ratio', 0):.1f}%）")
+        print()
+
+    if wc:
+        print("工作类型分布（按提交说明关键词）")
+        print(f"  Bug 修复：{format_number(wc.get('bug_fix_commits', 0))} 次（{wc.get('bug_fix_ratio', 0):.1f}%）")
+        print(f"  重构优化：{format_number(wc.get('refactor_commits', 0))} 次（{wc.get('refactor_ratio', 0):.1f}%）")
+        print(f"  其他：{format_number(wc.get('other_commits', 0))} 次（{wc.get('other_ratio', 0):.1f}%）")
+        print()
+
+    if cq:
+        print("提交质量")
+        print(f"  合并提交：{format_number(cq.get('merge_commits', 0))} 次（{cq.get('merge_ratio', 0):.1f}%）")
+        print(f"  自动化/Bot 提交：{format_number(cq.get('bot_commits', 0))} 次")
+        print(f"  提交说明平均长度：{cq.get('avg_subject_length', 0):.1f} 字 / {cq.get('avg_subject_words', 0):.1f} 词")
+        print()
+
+    ma = metrics.get("merge_analysis") or {}
+    if ma.get("total_merges"):
+        print("合并分析")
+        print(f"  合并提交总数：{format_number(ma.get('total_merges', 0))} 次（占全部提交 {ma.get('merge_ratio', 0):.1f}%）")
+        print(f"  PR 合并：{format_number(ma.get('pr_merges', 0))} 次 / 分支合并：{format_number(ma.get('branch_merges', 0))} 次")
+        if ma.get("merge_by_author"):
+            print("  谁做的合并：")
+            for row in ma["merge_by_author"]:
+                print(f"    {row['author']}：{format_number(row['count'])} 次")
+        if ma.get("merge_sources"):
+            print("  合并来源分支 Top：")
+            for row in ma["merge_sources"]:
+                print(f"    {row['branch']}：{format_number(row['count'])} 次")
+        print(f"  含冲突解决的合并：{format_number(ma.get('conflict_merges', 0))} 次（占合并 {ma.get('conflict_ratio', 0):.1f}%）")
+        if ma.get("conflict_resolvers"):
+            print("  谁解决的冲突：")
+            for row in ma["conflict_resolvers"]:
+                print(f"    {row['author']}：{format_number(row['count'])} 次")
+        if ma.get("conflict_files"):
+            print("  冲突热点文件：")
+            for row in ma["conflict_files"]:
+                print(f"    {row['file']}：{format_number(row['count'])} 次")
+        print()
+
+    ra = metrics.get("revert_analysis") or {}
+    if ra.get("revert_commits") or ra.get("bug_prone_files"):
+        print("问题溯源（Revert / Bug 高发）")
+        print(f"  回滚提交：{format_number(ra.get('revert_commits', 0))} 次（{ra.get('revert_ratio', 0):.1f}%）")
+        if ra.get("revert_by_author"):
+            print("  谁在回滚救火：")
+            for row in ra["revert_by_author"]:
+                print(f"    {row['author']}：{format_number(row['count'])} 次")
+        if ra.get("reverted_authors"):
+            print("  谁的提交被回滚：")
+            for row in ra["reverted_authors"]:
+                print(f"    {row['author']}：{format_number(row['count'])} 次")
+        if ra.get("bug_prone_files"):
+            print("  Bug 高发文件（被修复提交触碰最多）：")
+            for row in ra["bug_prone_files"]:
+                print(f"    {row['file']}：{format_number(row['count'])} 次")
+        print()
+
+    ct = metrics.get("commit_types") or {}
+    if ct.get("distribution"):
+        print("提交类型细分（Conventional Commits）")
+        type_labels = {"feat": "新功能", "fix": "修复", "refactor": "重构", "docs": "文档", "test": "测试", "style": "样式", "perf": "性能", "build": "构建", "ci": "CI", "chore": "杂务", "revert": "回滚", "merge": "合并", "other": "其他"}
+        dist_rows = [[type_labels.get(d["type"], d["type"]), format_number(d["count"]), f"{d['ratio']:.1f}%"] for d in ct["distribution"]]
+        print_rows(["类型", "提交", "占比"], dist_rows)
+        if ct.get("by_author"):
+            print("  每位开发者的类型构成：")
+            for row in ct["by_author"]:
+                parts = [f"{type_labels.get(t, t)} {row[t]}" for t in ("feat", "fix", "refactor", "docs", "test", "chore", "merge", "revert", "other") if row.get(t)]
+                print(f"    {row['author']}：{'，'.join(parts) if parts else '无'}")
+        print()
+
+    ow = metrics.get("ownership") or {}
+    if ow.get("total_files"):
+        print("文件所有权与协作")
+        print(f"  涉及文件：{format_number(ow.get('total_files', 0))} 个")
+        print(f"  单人文件（知识孤岛）：{format_number(ow.get('single_owner_files', 0))} 个（{ow.get('single_owner_ratio', 0):.1f}%）")
+        print(f"  多人协作文件：{format_number(ow.get('shared_files', 0))} 个")
+        if ow.get("file_owners"):
+            print("  热点文件主要负责人：")
+            owner_rows = [[f["file"], f["owner"], f"{f['owner_ratio']:.0f}%", f["author_count"]] for f in ow["file_owners"]]
+            print_rows(["文件", "主要负责人", "占比", "参与人数"], owner_rows)
+        if ow.get("collaboration_pairs"):
+            print("  协作最多的搭档（共同改动文件数）：")
+            for row in ow["collaboration_pairs"]:
+                print(f"    {row['pair']}：{format_number(row['count'])} 个文件")
+        print()
+
+    if metrics.get("authors"):
+        print("开发者明细")
+        author_rows = [[a["author"], format_number(a["commits"]), f"{a['commit_ratio']:.1f}%", format_number(a["added"]), format_number(a["deleted"]), a["active_days"], a["first_commit"], a["last_commit"], a["peak_hour"], f"{a['avg_per_active_day']:.1f}"] for a in metrics["authors"]]
+        print_rows(["开发者", "提交", "占比", "新增", "删除", "活跃天", "首提交", "末提交", "最活跃时段", "日均"], author_rows)
+        print()
+
+    if metrics.get("projects"):
+        print("项目明细")
+        project_rows = [[p["project"], format_number(p["commits"]), format_number(p["added"]), format_number(p["deleted"]), p["authors"], p["active_days"]] for p in metrics["projects"]]
+        print_rows(["项目", "提交", "新增", "删除", "开发者", "活跃天"], project_rows)
+        print()
+
 
 def print_terminal_report(payload):
     commits = payload["commits"]
@@ -971,6 +1744,9 @@ def print_terminal_report(payload):
     hour_counts = group_count(commits, "hour", [str(index).zfill(2) for index in range(24)])
     print_rows(["时间", "提交"], [[f"{key}:00", format_number(value)] for key, value in hour_counts.items()])
     print()
+
+    print_metrics_terminal(build_metrics(commits))
+    print_branch_overview(payload.get("branch_infos") or [])
 
     if payload["errors"]:
         print("部分项目读取失败")
@@ -1405,13 +2181,22 @@ if author_filter:
 repos = discover_repos()
 all_commits = []
 errors = []
+branch_infos = []
+conflict_merge_map = {}
 for index, repo in enumerate(repos, start=1):
     try:
         print_progress(f"处理仓库 {index}/{len(repos)}")
         all_commits.extend(parse_commits(repo))
+        conflict_merge_map.update(collect_conflict_merges(repo))
+        branch_infos.append(collect_branches(repo))
     except Exception as exc:
         print_progress(f"仓库读取失败：{os.path.basename(repo)}，{exc}")
         errors.append({"project": os.path.basename(repo), "message": str(exc)})
+
+# 给合并提交补充冲突解决文件（combined diff 有内容 = 该合并动过手）
+for commit in all_commits:
+    if commit.get("is_merge") and commit["hash"] in conflict_merge_map:
+        commit["conflict_files"] = conflict_merge_map[commit["hash"]]
 
 repo_infos = []
 for path in repos:
@@ -1443,6 +2228,8 @@ payload = {
     "repos": [{"name": repo["name"], "branch": repo["branch"], "path": repo["path"]} for repo in repo_infos],
     "commits": all_commits,
     "pull_requests": pull_requests,
+    "branch_infos": branch_infos,
+    "metrics": build_metrics(all_commits),
     "errors": errors,
 }
 with open(output_path, "w", encoding="utf-8") as file:
@@ -1452,6 +2239,7 @@ print_progress(f"报告数据已生成：{output_path}")
 if report_mode == "web":
     print_web_summary(payload)
 else:
+    print_terminal_report(payload)
     export_path = write_csv_report(payload)
     print()
     print(f"CSV 报告已导出：{export_path}")

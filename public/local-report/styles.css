@@ -332,3 +332,29 @@ th {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+.text-panel {
+  padding: 4px 16px 12px;
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--color-text);
+  word-break: break-all;
+}
+
+.text-panel h3 {
+  margin: 10px 0 4px;
+  font-size: 13px;
+  color: var(--color-muted, #6b7280);
+  font-weight: 600;
+}
+
+.text-panel ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.text-panel .kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}

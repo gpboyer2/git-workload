@@ -89,6 +89,49 @@
         </article>
       </section>
 
+      <section class="summary-grid" id="overviewGrid">
+        <article class="panel summary-card">
+          <div class="label">活跃天数</div>
+          <div class="value" id="ovActiveDays">0</div>
+        </article>
+        <article class="panel summary-card">
+          <div class="label">最长连续提交</div>
+          <div class="value" id="ovLongestStreak">0</div>
+        </article>
+        <article class="panel summary-card">
+          <div class="label">平均每次改动</div>
+          <div class="value" id="ovAvgLines">0</div>
+        </article>
+        <article class="panel summary-card">
+          <div class="label">大型提交(&gt;500行)</div>
+          <div class="value" id="ovLargeCommits">0</div>
+        </article>
+        <article class="panel summary-card">
+          <div class="label">深夜提交占比</div>
+          <div class="value" id="ovNightRatio">0%</div>
+        </article>
+        <article class="panel summary-card">
+          <div class="label">周末提交占比</div>
+          <div class="value" id="ovWeekendRatio">0%</div>
+        </article>
+        <article class="panel summary-card">
+          <div class="label">合并提交</div>
+          <div class="value" id="ovMergeCommits">0</div>
+        </article>
+        <article class="panel summary-card">
+          <div class="label">Bus Factor</div>
+          <div class="value" id="ovBusFactor">0</div>
+        </article>
+        <article class="panel summary-card">
+          <div class="label">基尼系数</div>
+          <div class="value" id="ovGini">0</div>
+        </article>
+        <article class="panel summary-card">
+          <div class="label">去重文件数</div>
+          <div class="value" id="ovUniqueFiles">0</div>
+        </article>
+      </section>
+
       <section class="content-grid">
         <article class="panel section">
           <h2>一周七天提交分布</h2>
@@ -134,6 +177,103 @@
               <tbody id="authorTable"></tbody>
             </table>
           </div>
+        </article>
+        <article class="panel section">
+          <h2>月度提交趋势</h2>
+          <div class="chart-frame" id="monthChartFrame">
+            <canvas id="monthChart"></canvas>
+            <div class="empty">当前筛选条件下没有可展示的数据</div>
+          </div>
+        </article>
+        <article class="panel section">
+          <h2>热点文件 Top 10</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>文件</th>
+                  <th>改动次数</th>
+                  <th>新增</th>
+                  <th>删除</th>
+                </tr>
+              </thead>
+              <tbody id="topFilesTable"></tbody>
+            </table>
+          </div>
+        </article>
+        <article class="panel section">
+          <h2>工作类型分布</h2>
+          <div class="chart-frame" id="categoryChartFrame">
+            <canvas id="categoryChart"></canvas>
+            <div class="empty">当前筛选条件下没有可展示的数据</div>
+          </div>
+        </article>
+        <article class="panel section">
+          <h2>时间健康度</h2>
+          <div class="chart-frame" id="healthChartFrame">
+            <canvas id="healthChart"></canvas>
+            <div class="empty">当前筛选条件下没有可展示的数据</div>
+          </div>
+        </article>
+        <article class="panel section">
+          <h2>开发者明细</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>开发者</th>
+                  <th>提交</th>
+                  <th>占比</th>
+                  <th>新增</th>
+                  <th>删除</th>
+                  <th>活跃天</th>
+                  <th>首提交</th>
+                  <th>末提交</th>
+                  <th>最活跃时段</th>
+                  <th>日均</th>
+                </tr>
+              </thead>
+              <tbody id="authorDetailTable"></tbody>
+            </table>
+          </div>
+        </article>
+        <article class="panel section">
+          <h2>合并与冲突</h2>
+          <div id="mergePanel" class="text-panel"></div>
+        </article>
+        <article class="panel section">
+          <h2>问题溯源（Revert / Bug 高发）</h2>
+          <div id="revertPanel" class="text-panel"></div>
+        </article>
+        <article class="panel section">
+          <h2>提交类型细分</h2>
+          <div class="chart-frame" id="typeChartFrame">
+            <canvas id="typeChart"></canvas>
+            <div class="empty">当前筛选条件下没有可展示的数据</div>
+          </div>
+          <div id="typeByAuthorPanel" class="text-panel"></div>
+        </article>
+        <article class="panel section">
+          <h2>文件所有权与协作</h2>
+          <div id="ownershipSummary" class="text-panel"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>文件</th>
+                  <th>主要负责人</th>
+                  <th>占比</th>
+                  <th>参与人数</th>
+                </tr>
+              </thead>
+              <tbody id="ownershipTable"></tbody>
+            </table>
+          </div>
+          <div id="collaborationPanel" class="text-panel"></div>
+        </article>
+        <article class="panel section">
+          <h2>分支概览</h2>
+          <div id="branchPanel" class="text-panel"></div>
         </article>
       </section>
     </main>
