@@ -18,7 +18,7 @@
     "build-local": "bash scripts/build-release.sh",
     "build-github": "bash scripts/build-github.sh",
     "compile": "tsc",
-    "dev": "npm run compile && GIT_WORKLOAD_REPORT_KEEP_ALIVE=1 ./bin/git-workload-report.sh",
+    "dev": "npm run compile && ./bin/git-workload-report.sh web",
     "preview": "node dist/index.js",
     "test": "jest"
   },

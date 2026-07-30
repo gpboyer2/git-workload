@@ -656,41 +656,13 @@ def fetch_github_pull_requests(remote_info, start_date):
     return pulls
 
 def build_pull_requests(repo_infos, commits, start_date):
-    pull_requests = []
-    for repo_info in repo_infos:
-        if repo_info["remote"]["provider"] != "github":
-            continue
-        repo_commits = [commit for commit in commits if commit["project_path"] == repo_info["path"]]
-        if not repo_commits:
-            continue
-        author_logins = resolve_github_author_logins(repo_info["remote"], repo_commits)
-        login_to_authors = {}
-        for author, logins in author_logins.items():
-            for login in logins:
-                login_to_authors.setdefault(login, set()).add(author)
-        if not login_to_authors:
-            continue
-        print_progress(f'读取 GitHub PR：{repo_info["name"]}')
-        pulls = fetch_github_pull_requests(repo_info["remote"], start_date)
-        for pr in pulls:
-            login = pr["login"]
-            if not login or login not in login_to_authors:
-                continue
-            for author in sorted(login_to_authors[login]):
-                pull_requests.append({
-                    "project": repo_info["name"],
-                    "project_path": repo_info["path"],
-                    "author": author,
-                    "login": login,
-                    "number": pr["number"],
-                    "title": pr["title"],
-                    "created_at": pr["created_at"],
-                    "merged_at": pr["merged_at"],
-                    "state": pr["state"],
-                })
-    return pull_requests
+    """按仓库读取 PR / MR 明细，并把平台账号映射回本地提交作者。
 
-def build_pull_requests_api(repo_infos, commits, start_date):
+    进度文案统一写「读取 Git PR」，不写死平台名：远端可能是 GitHub、GitLab，也可能是
+    Gitee 或公司自建服务，脚本没有资格在这里替用户断言是哪一家。
+    GitHub 和 GitLab 的接口形态本来就不一样，各自保留各自的读取实现，不强行抽出中间层；
+    这里只统一三步顺序：先判平台，再取账号映射，最后取 PR 列表。
+    平台不认识时不静默跳过，打一条明确的跳过原因，避免用户看到 PR 数为 0 却不知道为什么。"""
     pull_requests = []
     for repo_info in repo_infos:
         remote_info = repo_info["remote"]
@@ -698,29 +670,29 @@ def build_pull_requests_api(repo_infos, commits, start_date):
         if not repo_commits:
             continue
 
-        login_to_authors = {}
-        pulls = []
-
-        if remote_info["provider"] == "gitlab":
-            author_logins = resolve_gitlab_author_logins(remote_info, repo_commits)
-            for author, logins in author_logins.items():
-                for login in logins:
-                    login_to_authors.setdefault(login, set()).add(author)
-            if not login_to_authors:
-                continue
-            print_progress(f'读取 GitLab MR：{repo_info["name"]}')
-            pulls = fetch_gitlab_merge_requests(remote_info, start_date, login_to_authors.keys())
-        elif remote_info["provider"] == "github":
-            author_logins = resolve_github_author_logins(remote_info, repo_commits)
-            for author, logins in author_logins.items():
-                for login in logins:
-                    login_to_authors.setdefault(login, set()).add(author)
-            if not login_to_authors:
-                continue
-            print_progress(f'读取 GitHub PR：{repo_info["name"]}')
-            pulls = fetch_github_pull_requests(remote_info, start_date)
-        else:
+        provider = remote_info["provider"]
+        if provider not in ("github", "gitlab"):
+            print_progress(f'跳过 Git PR：{repo_info["name"]}，远端不是 GitHub / GitLab')
             continue
+
+        # 账号映射本身就要走网络，进度先打印，避免用户以为卡住了
+        print_progress(f'读取 Git PR：{repo_info["name"]}')
+        if provider == "gitlab":
+            author_logins = resolve_gitlab_author_logins(remote_info, repo_commits)
+        else:
+            author_logins = resolve_github_author_logins(remote_info, repo_commits)
+
+        login_to_authors = {}
+        for author, logins in author_logins.items():
+            for login in logins:
+                login_to_authors.setdefault(login, set()).add(author)
+        if not login_to_authors:
+            continue
+
+        if provider == "gitlab":
+            pulls = fetch_gitlab_merge_requests(remote_info, start_date, login_to_authors.keys())
+        else:
+            pulls = fetch_github_pull_requests(remote_info, start_date)
 
         for pr in pulls:
             login = pr["login"]
@@ -1745,7 +1717,7 @@ def print_terminal_report(payload):
     print_rows(["时间", "提交"], [[f"{key}:00", format_number(value)] for key, value in hour_counts.items()])
     print()
 
-    print_metrics_terminal(build_metrics(commits))
+    print_metrics_terminal(payload["metrics"])
     print_branch_overview(payload.get("branch_infos") or [])
 
     if payload["errors"]:
@@ -1839,16 +1811,48 @@ def format_review_pass_rate(value):
     return f"{value * 100:.2f}%"
 
 def write_csv_report(payload):
+    """导出 CSV。所有指标均直接来自 payload['metrics']（与 Web 报告页同一份核心计算 C），
+    保证 CSV 与 Web 内容一致；改一次 C，两处一起更新。"""
     file_name = datetime.now().strftime("output_%Y%m%d%H%M.csv")
     output_file_path = os.path.join(os.getcwd(), file_name)
     project_rows = build_project_export_rows(payload["commits"])
     author_rows = build_author_export_rows_from_payload(payload)
+    metrics = payload.get("metrics") or {}
     default_filter = payload["default_filter"]
+
+    def kv(writer, title, pairs):
+        writer.writerow([title])
+        for name, value in pairs:
+            writer.writerow([name, value])
+        writer.writerow([])
+
+    def table(writer, title, headers, rows):
+        writer.writerow([title])
+        writer.writerow(headers)
+        for row in rows:
+            writer.writerow(row)
+        writer.writerow([])
 
     with open(output_file_path, "w", encoding="utf-8-sig", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(["统计维度", "开始时间", default_filter["start_date"], "结束时间", default_filter["end_date"]])
         writer.writerow([])
+
+        # 核心汇总（与 Web 核心汇总同源，来自 payload）
+        commits = payload["commits"]
+        total_added = sum(c["added"] for c in commits)
+        total_deleted = sum(c["deleted"] for c in commits)
+        kv(writer, "核心汇总", [
+            ("仓库数量", len(payload.get("projects", []))),
+            ("有提交项目数", len(payload.get("active_projects", []))),
+            ("开发者数量", len(payload.get("authors", []))),
+            ("提交次数", len(commits)),
+            ("新增代码行", total_added),
+            ("删除代码行", total_deleted),
+            ("净变化行数", total_added - total_deleted),
+        ])
+
+        # 项目维度（保留原有汇总，含人均代码行）
         writer.writerow(["项目维度"])
         writer.writerow(["项目名称", "代码总行数", "新增行数", "删除行数", "提交代码总行数", "提交次数", "人均代码行数"])
         for row in project_rows:
@@ -1862,6 +1866,8 @@ def write_csv_report(payload):
                 row["per_author_lines"],
             ])
         writer.writerow([])
+
+        # 人员维度（保留原有汇总，含代码审核合格率）
         writer.writerow(["人员维度"])
         writer.writerow(["项目名称", "姓名", "提交总代码行", "新增行数", "删除行数", "提交次数", "代码审核合格率"])
         for row in author_rows:
@@ -1874,6 +1880,142 @@ def write_csv_report(payload):
                 row["commit_count"],
                 format_review_pass_rate(row["review_pass_rate"]),
             ])
+        writer.writerow([])
+
+        # ===== 以下全部来自 payload['metrics']，与 Web 报告页同一份核心计算 C =====
+        ts = metrics.get("time_span") or {}
+        if ts:
+            kv(writer, "时间跨度与活跃度", [
+                ("首次提交", ts.get("first_commit_date", "-")),
+                ("最近提交", ts.get("last_commit_date", "-")),
+                ("时间跨度(天)", ts.get("span_days", 0)),
+                ("活跃天数", ts.get("active_days", 0)),
+                ("活跃密度(%)", f'{ts.get("active_day_ratio", 0):.1f}'),
+            ])
+
+        cd = metrics.get("cadence") or {}
+        if cd:
+            kv(writer, "提交节奏", [
+                ("最忙一天", cd.get("peak_day_date", "-")),
+                ("最忙日提交数", cd.get("max_commits_in_one_day", 0)),
+                ("提交尖峰(x)", f'{cd.get("commit_spike", 0):.1f}'),
+                ("最长连续提交(天)", cd.get("longest_streak", 0)),
+                ("当前连续提交(天)", cd.get("current_streak", 0)),
+                ("平均提交间隔(分钟)", f'{cd.get("avg_interval_minutes", 0):.0f}'),
+                ("最活跃星期", cd.get("peak_weekday", "-")),
+                ("最活跃时段", cd.get("peak_hour", "-")),
+            ])
+
+        mt = metrics.get("monthly_trend") or []
+        if mt:
+            table(writer, "月度提交趋势", ["月份", "提交", "新增", "删除", "开发者", "活跃天"],
+                [[m["month"], m["commits"], m["added"], m["deleted"], m["authors"], m["active_days"]] for m in mt])
+
+        cc = metrics.get("code_changes") or {}
+        if cc:
+            kv(writer, "代码改动概览", [
+                ("平均每次提交改动", f'{cc.get("avg_lines_per_commit", 0):.1f}'),
+                ("最大单次新增", cc.get("max_commit_added", 0)),
+                ("最大单次删除", cc.get("max_commit_deleted", 0)),
+                ("最大单次作者", cc.get("max_commit_author", "-")),
+                ("改动文件次数", cc.get("total_files_changed", 0)),
+                ("去重文件数", cc.get("unique_files", 0)),
+                ("大型提交(>500行)", cc.get("large_commits", 0)),
+                ("空提交", cc.get("empty_commits", 0)),
+                ("代码周转比(%)", f'{cc.get("churn_ratio", 0):.1f}'),
+            ])
+            top_files = cc.get("top_files") or []
+            if top_files:
+                table(writer, "热点文件 Top10", ["文件", "改动次数", "新增", "删除"],
+                    [[f["file"], f["changes"], f["added"], f["deleted"]] for f in top_files])
+
+        cn = metrics.get("concentration") or {}
+        if cn:
+            kv(writer, "开发者贡献集中度", [
+                ("Top1占比(%)", f'{cn.get("top1_ratio", 0):.1f}'),
+                ("Top2占比(%)", f'{cn.get("top2_ratio", 0):.1f}'),
+                ("基尼系数", f'{cn.get("gini", 0):.2f}'),
+                ("Bus Factor(人)", cn.get("bus_factor", 0)),
+                ("帕累托80%(人)", cn.get("pareto_80", 0)),
+            ])
+
+        th = metrics.get("time_health") or {}
+        if th:
+            kv(writer, "时间健康度", [
+                ("深夜提交(22:00-05:00)", f'{th.get("night_commits", 0)} ({th.get("night_ratio", 0):.1f}%)'),
+                ("周末提交(周六/日)", f'{th.get("weekend_commits", 0)} ({th.get("weekend_ratio", 0):.1f}%)'),
+                ("工作时间(09:00-18:00)", f'{th.get("worktime_commits", 0)} ({th.get("worktime_ratio", 0):.1f}%)'),
+                ("非工作时间", f'{th.get("offhours_commits", 0)} ({th.get("offhours_ratio", 0):.1f}%)'),
+            ])
+
+        wc = metrics.get("work_categories") or {}
+        if wc:
+            kv(writer, "工作类型分布(按提交说明关键词)", [
+                ("Bug修复", f'{wc.get("bug_fix_commits", 0)} ({wc.get("bug_fix_ratio", 0):.1f}%)'),
+                ("重构优化", f'{wc.get("refactor_commits", 0)} ({wc.get("refactor_ratio", 0):.1f}%)'),
+                ("其他", f'{wc.get("other_commits", 0)} ({wc.get("other_ratio", 0):.1f}%)'),
+            ])
+
+        cq = metrics.get("commit_quality") or {}
+        if cq:
+            kv(writer, "提交质量", [
+                ("合并提交", f'{cq.get("merge_commits", 0)} ({cq.get("merge_ratio", 0):.1f}%)'),
+                ("自动化/Bot提交", cq.get("bot_commits", 0)),
+                ("提交说明平均长度(字)", f'{cq.get("avg_subject_length", 0):.1f}'),
+                ("提交说明平均词数", f'{cq.get("avg_subject_words", 0):.1f}'),
+            ])
+
+        ma = metrics.get("merge_analysis") or {}
+        if ma.get("total_merges"):
+            kv(writer, "合并分析", [
+                ("合并提交总数", f'{ma.get("total_merges", 0)} ({ma.get("merge_ratio", 0):.1f}%)'),
+                ("PR合并", ma.get("pr_merges", 0)),
+                ("分支合并", ma.get("branch_merges", 0)),
+                ("含冲突解决的合并", f'{ma.get("conflict_merges", 0)} ({ma.get("conflict_ratio", 0):.1f}%)'),
+            ])
+            if ma.get("merge_by_author"):
+                table(writer, "谁做的合并", ["作者", "次数"], [[r["author"], r["count"]] for r in ma["merge_by_author"]])
+            if ma.get("merge_sources"):
+                table(writer, "合并来源分支 Top", ["分支", "次数"], [[r["branch"], r["count"]] for r in ma["merge_sources"]])
+            if ma.get("conflict_resolvers"):
+                table(writer, "谁解决的冲突", ["作者", "次数"], [[r["author"], r["count"]] for r in ma["conflict_resolvers"]])
+            if ma.get("conflict_files"):
+                table(writer, "冲突热点文件", ["文件", "次数"], [[r["file"], r["count"]] for r in ma["conflict_files"]])
+
+        ra = metrics.get("revert_analysis") or {}
+        if ra.get("revert_commits") or ra.get("bug_prone_files"):
+            kv(writer, "问题溯源(Revert/Bug高发)", [
+                ("回滚提交", f'{ra.get("revert_commits", 0)} ({ra.get("revert_ratio", 0):.1f}%)'),
+            ])
+            if ra.get("revert_by_author"):
+                table(writer, "谁在回滚救火", ["作者", "次数"], [[r["author"], r["count"]] for r in ra["revert_by_author"]])
+            if ra.get("reverted_authors"):
+                table(writer, "谁的提交被回滚", ["作者", "次数"], [[r["author"], r["count"]] for r in ra["reverted_authors"]])
+            if ra.get("bug_prone_files"):
+                table(writer, "Bug高发文件", ["文件", "次数"], [[r["file"], r["count"]] for r in ra["bug_prone_files"]])
+
+        ct = metrics.get("commit_types") or {}
+        if ct.get("distribution"):
+            table(writer, "提交类型细分", ["类型", "提交", "占比%"],
+                [[d["type"], d["count"], f'{d["ratio"]:.1f}'] for d in ct["distribution"]])
+            if ct.get("by_author"):
+                type_cols = ["feat", "fix", "refactor", "docs", "test", "style", "perf", "build", "ci", "chore", "revert", "merge", "other"]
+                table(writer, "每位开发者提交类型构成", ["开发者"] + type_cols,
+                    [[r["author"]] + [r.get(t, 0) for t in type_cols] for r in ct["by_author"]])
+
+        ow = metrics.get("ownership") or {}
+        if ow.get("total_files"):
+            kv(writer, "文件所有权与协作", [
+                ("涉及文件", ow.get("total_files", 0)),
+                ("单人文件(知识孤岛)", f'{ow.get("single_owner_files", 0)} ({ow.get("single_owner_ratio", 0):.1f}%)'),
+                ("多人协作文件", ow.get("shared_files", 0)),
+            ])
+            if ow.get("file_owners"):
+                table(writer, "热点文件主要负责人", ["文件", "主要负责人", "占比%", "参与人数"],
+                    [[f["file"], f["owner"], f'{f["owner_ratio"]:.0f}', f["author_count"]] for f in ow["file_owners"]])
+            if ow.get("collaboration_pairs"):
+                table(writer, "协作最多的搭档", ["搭档", "共同改动文件数"],
+                    [[r["pair"], r["count"]] for r in ow["collaboration_pairs"]])
     return output_file_path
 
 def escape_xml(value):
@@ -2162,7 +2304,6 @@ def print_web_summary(payload):
     ]
     total_added = sum(commit["added"] for commit in commits)
     total_deleted = sum(commit["deleted"] for commit in commits)
-    default_filter = payload["default_filter"]
     print(f"统计时间范围：{default_filter['start_date']} 至 {default_filter['end_date']}")
     print(f"仓库数量：{len(payload['projects'])}")
     print(f"有提交项目数：{len({commit['project'] for commit in commits})}")
@@ -2206,7 +2347,7 @@ for path in repos:
         "path": path,
         "remote": parse_remote_info(git_remote_url(path), path),
     })
-pull_requests = build_pull_requests_api(repo_infos, all_commits, collect_time_start)
+pull_requests = build_pull_requests(repo_infos, all_commits, collect_time_start)
 authors = sorted({commit["author"] for commit in all_commits})
 projects = sorted({repo["name"] for repo in repo_infos})
 active_projects = sorted({commit["project"] for commit in all_commits})
@@ -2278,36 +2419,82 @@ for port in range(start, start + 100):
 PY
 }
 
-port=`find_free_port "${GIT_WORKLOAD_REPORT_PORT:-19960}"`
+# find_free_port 只是探测，探完就把端口放开了，到真正监听之间存在时间差，
+# 这段时间里端口可能被别的进程抢走。所以这里必须确认服务真的能连上，不能只看进程起没起。
+wait_for_local_port()
+{
+python3 - "$1" <<'PY'
+import socket
+import sys
+import time
 
-if [ -z "$port" ]
+port = int(sys.argv[1])
+deadline = time.time() + 3
+while time.time() < deadline:
+    sock = socket.socket()
+    sock.settimeout(0.5)
+    connected = sock.connect_ex(("127.0.0.1", port)) == 0
+    sock.close()
+    if connected:
+        sys.exit(0)
+    time.sleep(0.2)
+sys.exit(1)
+PY
+}
+
+# Web 模式的本地服务必须是当前终端的前台子进程，不允许脱离会话在后台常驻。
+# 语义是：命令跑完终端就一直占着，谁关终端谁停服务；按 Ctrl+C 才释放端口并删掉临时目录。
+# 这样用户不会留下一堆自己都不知道的孤儿服务，也不用再手动记 PID 去 kill。
+# 访问日志直接丢弃，保持控制台干净，只留“运行中”这一个状态。
+# 起不来就换端口重试，最多 3 次；3 次都失败就明确报错退出，绝不打印一个连不上的地址糊弄用户。
+server_pid=""
+scan_base="${GIT_WORKLOAD_REPORT_PORT:-19960}"
+attempt=1
+while [ "$attempt" -le 3 ]
+do
+    port=`find_free_port "$scan_base"`
+
+    if [ -z "$port" ]
+    then
+        echo "第 $attempt 次尝试：从 $scan_base 起往后 100 个端口都被占用。"
+    else
+        python3 -m http.server "$port" --bind 127.0.0.1 --directory "$work_dir" >/dev/null 2>&1 &
+        candidate_pid=$!
+
+        if wait_for_local_port "$port"
+        then
+            server_pid="$candidate_pid"
+            break
+        fi
+
+        kill "$candidate_pid" 2>/dev/null
+        wait "$candidate_pid" 2>/dev/null
+        echo "第 $attempt 次尝试：端口 $port 上的本地服务没起来，可能刚被其他进程抢占。"
+        # 这次没起来，下次从刚失败的端口往后接着找，真正换一个端口试
+        scan_base=$((port + 1))
+    fi
+
+    attempt=$((attempt + 1))
+    sleep 1
+done
+
+if [ -z "$server_pid" ]
 then
-    echo "未找到可用本地端口，请稍后再试。"
+    echo "本地服务连续 3 次启动失败，已放弃。"
+    echo "请检查 ${GIT_WORKLOAD_REPORT_PORT:-19960} 起的端口占用：lsof -nP -iTCP -sTCP:LISTEN"
+    echo "也可以设置 GIT_WORKLOAD_REPORT_PORT 指定其他起始端口后重试。"
+    rm -rf "$work_dir"
     exit 1
 fi
 
-server_pid=`python3 - "$port" "$work_dir" "/tmp/git-workload-report-$port.log" <<'PY'
-import subprocess
-import sys
+# Ctrl+C（INT）和 kill（TERM）走同一套收尾：停服务、回收子进程、清临时目录。
+trap 'kill "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null; rm -rf "$work_dir"; echo; echo "本地服务已停止，临时报告目录已清理。"; exit 0' INT TERM
 
-port, work_dir, log_path = sys.argv[1:]
-log_file = open(log_path, "ab")
-process = subprocess.Popen(
-    [sys.executable, "-m", "http.server", port, "--bind", "127.0.0.1", "--directory", work_dir],
-    stdin=subprocess.DEVNULL,
-    stdout=log_file,
-    stderr=subprocess.STDOUT,
-    start_new_session=True,
-)
-print(process.pid)
-PY
-`
 local_url="http://127.0.0.1:$port/"
 
 echo
 echo "本地可视化分析结果已启动:"
 echo "$local_url"
-echo "本地服务进程：$server_pid"
 echo "如需指定端口，可设置环境变量：GIT_WORKLOAD_REPORT_PORT=19960"
 
 if ! open_local_url "$local_url"
@@ -2315,8 +2502,5 @@ then
     echo "未能自动打开浏览器，请手动复制上面的地址访问。"
 fi
 
-if [ "$GIT_WORKLOAD_REPORT_KEEP_ALIVE" = "1" ]
-then
-    echo "dev 模式会保持本地服务运行，按 Ctrl+C 停止。"
-    wait "$server_pid"
-fi
+echo "本地服务运行中，按 Ctrl+C 停止并清理临时报告目录。"
+wait "$server_pid"

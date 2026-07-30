@@ -65,12 +65,13 @@ npm run dev
 # 方式 2：指定仓库清单 + 自定义端口（开发调试常用）
 GIT_WORKLOAD_REPORT_PORT=21960 ./start.sh directory=./directory.txt web
 
-# 方式 3：源码仓库里直接跑 Python 引擎并开启 Web（KEEP_ALIVE 保持进程便于调试）
-GIT_WORKLOAD_REPORT_KEEP_ALIVE=1 ./bin/git-workload-report.sh web
+# 方式 3：源码仓库里直接跑 Python 引擎并开启 Web
+./bin/git-workload-report.sh web
 ```
 
 - 默认服务地址：`http://127.0.0.1:19960`
 - 端口被占用时会自动向后查找（19960 → 19961 → …），日志里会打印最终地址。
+- **Web 模式是前台常驻的**：打印完地址后终端会一直占着不返回提示符，这就是「服务运行中」的状态。按 `Ctrl+C` 才会停掉本地服务、释放端口并删除临时报告目录。服务不会脱离终端在后台常驻，关掉终端等于停服务，不需要手动记 PID 去 kill。
 - 脚本会自动尝试用系统默认浏览器打开；若当前环境无可用打开命令（如部分 WSL / 服务器），**不会报错退出**，只打印本地地址，手动复制访问即可。
 - 统计过程持续输出 `[进度]` 日志。仓库较大、历史较多或 WSL 读 Windows 盘目录时，只要终端仍在输出进度，就表示程序在运行。
 - Web 模式默认展示近 7 天，但后台会按更大数据范围（默认 `2022-01-01` 起）生成 `report-data.json`，便于页面切换"全部时间 / 近 30 天 / 今年"等范围继续筛选。
@@ -179,7 +180,6 @@ node dist/index.js /workspace
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `GIT_WORKLOAD_REPORT_PORT` | `19960` | Web 模式本地服务起始端口，被占用时自动向后查找 |
-| `GIT_WORKLOAD_REPORT_KEEP_ALIVE` | 空 | 值为 `1` 时保持本地服务进程（用于开发调试） |
 
 ---
 
@@ -301,7 +301,7 @@ git-workload/
 |------|------|
 | `npm install` | 安装依赖（Node >= 16） |
 | `npm run compile` | `tsc` 编译 `src/` → `dist/` |
-| `npm run dev` | 编译后运行本地报告引擎，并 `KEEP_ALIVE=1` 保持进程便于调试 |
+| `npm run dev` | 编译后以 Web 模式运行本地报告引擎，终端前台常驻，`Ctrl+C` 停止 |
 | `npm run preview` | 运行 TypeScript CLI（`node dist/index.js`） |
 | `npm test` | Jest 单元测试 |
 | `npm run build-local` | 构建本地 tar.gz 制品到 `release/` |
