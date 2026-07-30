@@ -3,6 +3,6 @@
 # 示例：
 # /Users/peng/Desktop/Project/project-a
 # /Users/peng/Desktop/Project/project-b
-/mnt/d/Projects/codex-config
-/mnt/d/Projects/git-workload
-/mnt/d/projects/pre-commit-hooks
+/Users/peng/Desktop/Project/codex-config
+/Users/peng/Desktop/Project/git-workload
+/Users/peng/Desktop/Project/pre-commit-hooks

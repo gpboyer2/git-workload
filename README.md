@@ -1,46 +1,87 @@
 # git-workload-report
 
-`git-workload-report` 是一个面向中文团队的本地 Git 工作量统计工具。它读取本机 Git 仓库历史，生成本地 CSV 报告或本地 Web 报告页，用于查看指定时间范围内的提交次数、新增代码行、删除代码行、开发者分布、仓库分布和提交时间分布。
+`git-workload-report` 是一个面向中文团队的本地 Git 工作量统计工具。它读取本机 Git 仓库历史，生成本地 CSV 报告、TXT 报告或本机 Web 报告页，用于查看指定时间范围内的提交次数、新增/删除代码行、开发者分布、仓库分布、提交时间分布，以及加班、提交类型、文件所有权等深度指标。
 
-## 背景
+当前版本：**1.0.9**
 
-这个工具的核心场景是：用户已经有多个本地 Git 仓库，需要快速统计某段时间内团队或个人的代码提交情况，并在本机查看或导出报告。
+## 重要：本仓库包含两套运行引擎
 
-原始制品解压后只有 `bin`、`public`、`README.md` 和 `LICENSE`。现在制品根目录新增 `start.sh`，用户解压后可以直接执行：
+这个仓库现在同时有两套东西，请先分清，避免用错入口：
+
+| 引擎 | 入口 | 形态 | 状态 | 说明 |
+|------|------|------|------|------|
+| **本地报告引擎（已发布）** | `start.sh` → `bin/git-workload-report.sh`（内嵌 Python） | 解压即用，产物见 `git-workload-report-v*.tar.gz` | 稳定 | 产出 CSV / TXT / 本地 Web 报告页，是本工具对外发布的主形态 |
+| **TypeScript CLI（开发中）** | `node dist/index.js`（源码在 `src/`，编译产物 `dist/`） | npm 包 / Node 进程 | 开发中 | 更丰富的终端分析（单仓库 / 多仓库、996 指数、加班、时区、节假日调休等），尚未接入 npm `bin` |
+
+两套引擎共用同一批 Git 仓库数据，但**输出形态不同**：本地报告引擎走 CSV / TXT / Web；TypeScript CLI 走彩色终端表格。
+
+---
+
+## 快速开始
+
+### A. 最终用户：下载制品直接用（推荐）
+
+1. 从 GitHub Releases 下载 `git-workload-report-v*.tar.gz` 并解压。
+2. 编辑解压目录里的 `directory.txt`，每行写一个要统计的 Git 仓库路径（支持 `#` 注释、空行忽略）。
+3. 运行：
 
 ```bash
+# 导出 CSV 到当前目录
 ./start.sh
+
+# 打开本机 Web 报告页（localhost）
+./start.sh web
 ```
 
-`start.sh` 只负责启动 `./bin/git-workload-report.sh`，不承载统计逻辑。
+默认统计近 7 天。`directory.txt` 不存在且未传仓库路径时，脚本会从所在目录向上找 Git 仓库。
 
-制品根目录同时内置 `directory.txt`。用户默认只需要编辑这个文件，把要统计的 Git 仓库路径逐行写进去，然后执行 `./start.sh` 或 `./start.sh web`。
+### B. 开发者：从源码运行
 
-## 目标
+```bash
+# 1. 安装依赖（Node >= 16）
+npm install
 
-- 所有数据只在本机处理，不上传外网。
-- 默认 CSV 导出、Web 页面和 TXT 导出共用同一份本地统计数据。
-- Web 页面中的仓库、开发者、时间段筛选结果必须和导出的 TXT 内容一致。
-- 打包产物必须内置报告页，不依赖 GitHub Pages、Vercel 或任何公网服务。
-- 入口名称统一为 `git-workload-report`，制品根目录入口统一为 `start.sh`。
+# 2. 编译 TypeScript（产出 dist/）
+npm run compile
 
-## 约束
+# 3. 运行 TypeScript CLI（终端分析）
+npm run preview -- [仓库路径...] [选项]
+# 等价于： node dist/index.js [仓库路径...] [选项]
 
-- 禁止把页面入口改回外网地址。
-- 禁止让 `start.sh` 绕过 `./bin/git-workload-report.sh`。
-- `directory` 参数表示“仓库路径清单配置文件”，不是仓库目录。
-- `directory` 配置文件名可以自定义，但后缀必须是 `.txt`。
-- 不传 `directory` 参数时，默认读取制品根目录的 `directory.txt`。
-- 不为旧入口、旧业务名或错误参数格式增加兼容分支。
-- 页面筛选和 TXT 导出必须基于当前筛选后的 commits，不能导出全量原始数据。
-- 统计过程必须持续输出 `[进度]` 日志，避免慢设备、WSL 或大仓库场景下用户误以为程序卡死。
-- 注释只保留核心逻辑、关键约束和必要公式，避免重复解释代码本身。
+# 4. 运行/调试本地报告引擎（Python 引擎，localhost Web 见下节）
+npm run dev
+```
 
-## 输入结构
+---
 
-### 命令格式
+## 启动本地报告页（localhost / Web 模式）
 
-解压制品后用：
+本地 Web 报告页由**本地报告引擎**生成，全部数据在本机处理，不依赖任何公网服务。三种启动方式：
+
+```bash
+# 方式 1：制品入口，编辑好 directory.txt 后
+./start.sh web
+
+# 方式 2：指定仓库清单 + 自定义端口（开发调试常用）
+GIT_WORKLOAD_REPORT_PORT=21960 ./start.sh directory=./directory.txt web
+
+# 方式 3：源码仓库里直接跑 Python 引擎并开启 Web（KEEP_ALIVE 保持进程便于调试）
+GIT_WORKLOAD_REPORT_KEEP_ALIVE=1 ./bin/git-workload-report.sh web
+```
+
+- 默认服务地址：`http://127.0.0.1:19960`
+- 端口被占用时会自动向后查找（19960 → 19961 → …），日志里会打印最终地址。
+- 脚本会自动尝试用系统默认浏览器打开；若当前环境无可用打开命令（如部分 WSL / 服务器），**不会报错退出**，只打印本地地址，手动复制访问即可。
+- 统计过程持续输出 `[进度]` 日志。仓库较大、历史较多或 WSL 读 Windows 盘目录时，只要终端仍在输出进度，就表示程序在运行。
+- Web 模式默认展示近 7 天，但后台会按更大数据范围（默认 `2022-01-01` 起）生成 `report-data.json`，便于页面切换"全部时间 / 近 30 天 / 今年"等范围继续筛选。
+
+> 注意：TypeScript CLI（`npm run preview`）是**纯终端**工具，不开启 Web 服务。要看可视化报告页请用上面的本地报告引擎（`web`）。
+
+---
+
+## 本地报告引擎：命令行参数
+
+解压制品或源码根目录执行：
 
 ```bash
 ./start.sh [参数...]
@@ -49,45 +90,77 @@
 ./start.sh directory=/path/to/directory.txt [web] [开始日期] [结束日期] [作者关键词]
 ```
 
-### 参数说明
-
 | 参数 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| `web` | 否 | 终端模式 | 启动本机 Web 报告页 |
-| `开始日期` | 否 | 近 7 天开始日期 | Git log 起始日期，格式为 `YYYY-MM-DD` |
-| `结束日期` | 否 | 当前日期 | Git log 结束日期，格式为 `YYYY-MM-DD` |
+| `web` | 否 | 终端模式 | 启动本机 Web 报告页（localhost） |
+| `开始日期` | 否 | 近 7 天开始 | Git log 起始日期，格式 `YYYY-MM-DD` |
+| `结束日期` | 否 | 当前日期 | Git log 结束日期，格式 `YYYY-MM-DD` |
 | `作者关键词` | 否 | 空 | 传给 `git log --author` 的作者过滤关键词 |
 | `仓库路径...` | 否 | 脚本所在 Git 仓库 | 一个或多个本地 Git 仓库路径 |
 | `directory=/path/to/file.txt` | 否 | `./directory.txt` | 仓库路径清单文件，每行一个 Git 仓库路径 |
 | `config=/path/to/config.json` | 否 | `./config.json` | 运行配置文件，当前可配置 GitLab API 地址 |
 
-### 默认 directory.txt
+说明：
+- `directory` 表示"仓库路径清单配置文件"，不是仓库目录；文件名可自定义，但后缀必须是 `.txt`。
+- 不传 `directory` 时，默认读取制品/仓库根目录的 `directory.txt`；该文件不存在且未传仓库路径时，才从脚本所在目录向上查找 Git 仓库根目录。
+- 作者关键词只作为启动默认筛选，页面打开后仍可多选仓库、人员并调整时间段。
+- 本引擎依赖 `python3`，缺失会直接报错退出。
 
-制品根目录默认包含：
+---
 
-```text
-git-workload-report/directory.txt
+## TypeScript CLI：命令行参数
+
+通过 `npm run preview -- [参数]` 或 `node dist/index.js [参数]` 运行。CLI 会**智能判断**单仓库 / 多仓库模式：
+
+```bash
+# 单仓库：分析当前仓库（默认回溯最近一年）
+node dist/index.js
+node dist/index.js /path/to/repo
+node dist/index.js -y 2025                 # 分析 2025 整年
+node dist/index.js --self                   # 只统计当前 Git 用户
+node dist/index.js --ignore-author "bot"    # 排除机器人提交
+
+# 多仓库：传入多个路径，或在一个含多个子仓库的目录运行
+node dist/index.js /proj1 /proj2
+node dist/index.js /workspace
 ```
 
-不传 `directory=...` 时，脚本会优先读取这个文件。只有这个文件不存在，并且命令行也没有传仓库路径时，才回到脚本所在目录的 Git 仓库发现逻辑。
+常用选项：
 
-### directory.txt 格式
+| 选项 | 说明 |
+|------|------|
+| `-s, --since <date>` | 开始日期 `YYYY-MM-DD` |
+| `-u, --until <date>` | 结束日期 `YYYY-MM-DD` |
+| `-y, --year <year>` | 年份或年份范围，如 `2025` 或 `2023-2025` |
+| `--all-time` | 分析整个仓库历史（默认最近一年） |
+| `--self` | 仅统计当前 Git 用户的提交 |
+| `-H, --hours <range>` | 手动指定标准工作时间，如 `9-18` 或 `9.5-18.5` |
+| `--half-hour` | 以半小时粒度展示时间分布（默认按小时） |
+| `--ignore-author <regex>` | 排除匹配的作者，如 `bot\|jenkins` |
+| `--ignore-msg <regex>` | 排除匹配的提交消息，如 `merge\|lint` |
+| `--timezone <offset>` | 指定时区分析，如 `+0800` |
+| `--cn` | 强制开启中国节假日调休模式 |
+| `--skip-user-analysis` | 跳过团队工作模式分析 |
+| `--max-users <number>` | 最大分析用户数（默认 30） |
+
+---
+
+## directory.txt 格式
+
+每行一个 Git 仓库路径；空行与 `#` 开头的注释行忽略；后缀必须是 `.txt`。
 
 ```text
-/Users/peng/Desktop/Project/0-ppll/ppll-server
-/Users/peng/Desktop/Project/0-ppll/ppll-wap
+# 每行填写一个需要统计的 Git 仓库路径
+/Users/peng/Desktop/Project/codex-config
+/Users/peng/Desktop/Project/git-workload
+/Users/peng/Desktop/Project/pre-commit-hooks
 ```
 
-规则：
+---
 
-- 每行一个 Git 仓库路径。
-- 空行会被忽略。
-- `#` 开头的注释行会被忽略。
-- 文件后缀必须是 `.txt`。
+## config.json 格式
 
-### config.json 格式
-
-制品根目录可以额外放一个 `config.json`：
+仓库根目录可放一个 `config.json`，用于指定 GitLab API 根地址：
 
 ```json
 {
@@ -96,48 +169,48 @@ git-workload-report/directory.txt
 ```
 
 规则：
+- `gitlab_api_base_url` 显式指定 GitLab API 根地址；配置了就优先用，否则回退到自动识别（结合远程 URL、常见端口猜地址）。
+- 也可用 `config=/path/to/config.json` 指定其他配置文件。
 
-- `gitlab_api_base_url` 用于显式指定 GitLab API 根地址。
-- 脚本会优先读取这个配置；未配置时，才回退到自动识别逻辑。
-- 也可以通过 `config=/path/to/config.json` 指定其他配置文件。
+---
 
-### 环境变量
+## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `GIT_WORKLOAD_REPORT_PORT` | `19960` | Web 模式本地服务起始端口，端口被占用时自动向后查找 |
-| `GIT_WORKLOAD_REPORT_KEEP_ALIVE` | 空 | 值为 `1` 时保持本地服务进程，用于开发调试 |
+| `GIT_WORKLOAD_REPORT_PORT` | `19960` | Web 模式本地服务起始端口，被占用时自动向后查找 |
+| `GIT_WORKLOAD_REPORT_KEEP_ALIVE` | 空 | 值为 `1` 时保持本地服务进程（用于开发调试） |
 
-### WSL 说明
-
-在 WSL2 中执行 `./start.sh web` 时，脚本会优先尝试通过 Windows 浏览器打开本地报告页。如果当前环境缺少可用的打开命令，脚本不会报错退出，只会打印本地地址，用户手动复制到浏览器访问即可。
+---
 
 ## 输出结构
 
-### 默认导出
+### 默认导出（CSV）
 
-不带 `web` 参数执行时，脚本会先输出统计进度日志，然后直接在当前执行目录导出一个 CSV 文件。
+不带 `web` 执行时，脚本先输出统计进度日志，然后直接在当前执行目录导出一个 CSV：
 
 - 文件名格式：`output_YYYYMMDDHHmm.csv`
-- 文件内容分为两段：项目维度、人员维度
-- 文件头会写入当前统计开始时间和结束时间
+- 内容分两段：项目维度、人员维度；文件头写入统计开始/结束时间。
 
-### Web 输出
+### Web 输出（localhost）
 
-Web 模式启动 `127.0.0.1` 本地服务，并打开报告页。
+Web 模式启动 `127.0.0.1` 本地服务并打开报告页。页面数据来源是脚本生成的 `report-data.json`。支持：
 
-启动过程中会先输出 `[进度]` 日志。仓库较大、历史较多或在 WSL 中读取 Windows 盘目录时，Git 日志读取可能比较慢，只要终端仍在输出进度或停留在某个仓库读取阶段，就表示程序仍在运行。
+- 仓库复选框筛选（首次默认全选）
+- 开发者复选框筛选（跟随时间段与仓库筛选动态刷新）
+- 时间段筛选（近 7 天 / 近 30 天 / 今年 / 全部时间）
+- 图表展示、CSV 导出、TXT 导出
+- 页面筛选与 TXT 导出必须基于当前筛选后的 commits，与页面展示一致
 
-页面数据来源是脚本生成的 `report-data.json`。默认展示近 7 天，但在未显式传开始日期时，Web 模式会额外加载更长时间范围的数据，便于页面切换到“全部时间”“近 30 天”“今年”等范围时继续筛选。页面支持：
+### TXT 导出格式
 
-- 仓库复选框筛选，首次默认全选所有已识别仓库
-- 开发者复选框筛选，会跟随当前时间段和仓库筛选结果动态刷新
-- 时间段筛选，首次默认“近7天”
-- 图表展示
-- CSV 导出
-- TXT 导出
+使用当前页面筛选后的数据，包含：生成/导出时间、当前时间范围、仓库筛选、开发者筛选、核心汇总、仓库数量、有提交项目数、仓库信息、项目提交占比、开发者工作量、一周七天分布、24 小时分布等。
 
-### report-data.json 数据格式
+文件名格式：`git-workload-report-开始日期_结束日期.txt`
+
+### report-data.json 数据格式（节选）
+
+Web 页面与导出都读这份本机生成的文件，结构如下（节选关键字段）：
 
 ```json
 {
@@ -147,19 +220,12 @@ Web 模式启动 `127.0.0.1` 本地服务，并打开报告页。
     "end_date": "2026-04-24",
     "author_keyword": ""
   },
-  "data_range": {
-    "start_date": "2022-01-01",
-    "end_date": "2026-04-24"
-  },
+  "data_range": { "start_date": "2022-01-01", "end_date": "2026-04-24" },
   "projects": ["ppll-server", "ppll-wap"],
   "active_projects": ["ppll-server"],
   "authors": ["Raymond", "hh"],
   "repos": [
-    {
-      "name": "ppll-server",
-      "branch": "dev",
-      "path": "/Users/peng/Desktop/Project/0-ppll/ppll-server"
-    }
+    { "name": "ppll-server", "branch": "dev", "path": "/Users/peng/Desktop/Project/0-ppll/ppll-server" }
   ],
   "commits": [
     {
@@ -176,98 +242,81 @@ Web 模式启动 `127.0.0.1` 本地服务，并打开报告页。
       "subject": "提交说明",
       "added": 10,
       "deleted": 2,
-      "files": [
-        {
-          "file": "src/index.js",
-          "added": 10,
-          "deleted": 2
-        }
-      ]
+      "files": [{ "file": "src/index.js", "added": 10, "deleted": 2 }]
     }
   ],
-  "errors": [
-    {
-      "project": "repo-name",
-      "message": "读取失败原因"
-    }
-  ]
+  "errors": [{ "project": "repo-name", "message": "读取失败原因" }]
 }
 ```
 
-### TXT 导出格式
+---
 
-TXT 导出使用当前页面筛选后的数据，包含：
+## 统计指标与公式
 
-- 生成时间和导出时间
-- 当前时间范围
-- 当前仓库筛选
-- 当前开发者筛选
-- 核心汇总
-- 仓库数量
-- 有提交项目数
-- 仓库信息
-- 项目提交占比
-- 开发者工作量
-- 一周七天提交分布
-- 24 小时提交分布
-
-文件名格式：
+本地报告引擎的部分核心指标：
 
 ```text
-git-workload-report-开始日期_结束日期.txt
+日均提交次数      = 提交次数 / 统计天数
+单日工作时长估算  = 当天最晚提交小时 - 当天最早提交小时 + 1
+日均工作时长      = 总估算工作时长 / 有提交的天数
+每周工作时长      = 日均工作时长 * 5
+加班时间占比      = max(每周工作时长 - 40, 0) / 每周工作时长 * 100
 ```
 
-## 核心流程
+TypeScript CLI 还额外计算：996 指数、加班/周末/深夜比例、跨时区协作检测、中国节假日调休判断、提交类型（Conventional Commits）细分、文件所有权与知识孤岛、贡献集中度（基尼系数 / Bus Factor / 帕累托）等，详见终端输出。
 
-### 1. 初始化
+---
 
-1. 解析启动参数。
-2. 识别是否为 Web 模式。
-3. 未传 `directory` 参数时，优先选择制品根目录的 `directory.txt`。
-4. 校验 `directory=*.txt` 配置文件。
-5. 确认本机存在 `python3`。
-6. 定位脚本目录和内置 Web 页面目录。
-7. 确定默认时间范围、作者关键词和仓库路径来源。
-8. 输出启动参数和仓库识别进度。
+## 项目结构（源码）
 
-### 2. 执行
+```text
+git-workload/
+├── bin/
+│   └── git-workload-report.sh      # 本地报告引擎入口（内嵌 Python，CSV/TXT/Web）
+├── start.sh                        # 制品固定启动入口，转发给 bin/
+├── directory.txt                   # 默认仓库清单（每行一个仓库路径）
+├── config.json                     # 运行配置（GitLab API 地址等）
+├── public/
+│   └── local-report/               # 本地 Web 报告页（index.html / app.js / styles.css / chart.umd.js）
+├── src/                            # TypeScript CLI 源码（开发中）
+│   ├── cli/                        # 命令注册、参数解析、报表打印
+│   ├── core/                       # 计算算法（996 指数、加班、时区、项目分类）
+│   ├── git/                        # Git 数据采集与合并
+│   ├── workspace/                  # 多仓库扫描
+│   ├── utils/                      # 终端/格式化/节假日/版本等工具
+│   └── index.ts                    # CLI 入口
+├── dist/                           # TypeScript 编译产物（npm run compile 生成）
+├── scripts/
+│   ├── build-release.sh            # 本地构建 tar.gz 制品
+│   └── build-github.sh             # 自增版本号 + 打 tag + 推送触发 GitHub Actions
+├── .github/workflows/release.yml   # 推送 v* tag 自动构建并发布 Release
+└── package.json
+```
 
-1. 读取 `directory.txt` 中的仓库路径。
-2. 合并命令行仓库路径和配置文件仓库路径。
-3. 对每个路径识别 Git 仓库根目录。
-4. 执行 `git log --numstat` 获取提交和文件改动。
-5. 每个仓库读取前、读取后、解析完成后都输出进度。
-6. 生成统一的 `report-data.json`。
-7. 默认模式在当前执行目录生成 CSV 报告。
-8. Web 模式在默认近 7 天筛选的同时，按更大数据范围生成 `report-data.json`。
-9. Web 模式复制内置页面到临时目录，启动本地 HTTP 服务。
-10. 页面按当前筛选条件渲染汇总、图表和表格。
-11. 点击 `导出 CSV` 或 `导出 TXT` 时，基于当前筛选后的 commits 导出。
-12. 自动打开浏览器失败时，只打印本地地址，不中断报告服务。
+---
 
-### 3. 验证
+## 开发与构建脚本
 
-本地开发完成后至少执行：
+| 脚本 | 作用 |
+|------|------|
+| `npm install` | 安装依赖（Node >= 16） |
+| `npm run compile` | `tsc` 编译 `src/` → `dist/` |
+| `npm run dev` | 编译后运行本地报告引擎，并 `KEEP_ALIVE=1` 保持进程便于调试 |
+| `npm run preview` | 运行 TypeScript CLI（`node dist/index.js`） |
+| `npm test` | Jest 单元测试 |
+| `npm run build-local` | 构建本地 tar.gz 制品到 `release/` |
+| `npm run build-github` | 自增补丁版本号、提交、`git tag` 并推送，触发 GitHub Actions 发布 |
+
+本地验证（开发完成后建议执行）：
 
 ```bash
-node -e "new Function(require('fs').readFileSync('public/local-report/app.js','utf8'))"
-npm test -- --runInBand
+npm run compile
+npm test
 npm run build-local
+tar -tzf git-workload-report-v1.0.9.tar.gz
 ```
 
-Web 相关改动需要额外执行：
-
-```bash
-GIT_WORKLOAD_REPORT_PORT=21960 ./start.sh directory=./directory.txt web 2026-04-01 2026-04-24
-```
-
-制品检查：
-
-```bash
-tar -tzf git-workload-report-v1.0.6.tar.gz
-```
-
-需要确认制品内至少包含：
+制品内需至少包含：
 
 ```text
 git-workload-report/start.sh
@@ -276,89 +325,34 @@ git-workload-report/bin/git-workload-report.sh
 git-workload-report/public/local-report/index.html
 git-workload-report/public/local-report/app.js
 git-workload-report/public/local-report/styles.css
+git-workload-report/README.md
+git-workload-report/LICENSE
 ```
 
-## 统计公式
+---
 
-日均提交次数：
+## 发布流程
 
-```text
-提交次数 / 统计天数
-```
+推送 `v*` 格式的 tag 会自动触发 `.github/workflows/release.yml`：
 
-单日工作时长估算：
+1. `npm run build-github` 会检查工作区是否干净，自增补丁版本号（如 `1.0.9` → `1.0.10`），修改 `package.json` / `package-lock.json`，打 `vX.Y.Z` tag 并推送。
+2. GitHub Actions 收到 tag 后：`npm ci` → `npm run build-local` 构建 tar.gz → `npm test`（失败不阻断）→ 用 commit log 生成 Release 说明并附上制品。
 
-```text
-当天最晚提交小时 - 当天最早提交小时 + 1
-```
-
-日均工作时长：
-
-```text
-总估算工作时长 / 有提交的天数
-```
-
-每周工作时长：
-
-```text
-日均工作时长 * 5
-```
-
-加班时间占比：
-
-```text
-max(每周工作时长 - 40, 0) / 每周工作时长 * 100
-```
-
-## 常用命令
-
-默认导出 CSV：
+本地手动发布：
 
 ```bash
-./start.sh
+npm run build-github          # 自动 bump + tag + push，触发 Actions
+# 或指定版本：
+VERSION=1.0.10 npm run build-github
 ```
 
-指定作者：
+---
 
-```bash
-./start.sh 2026-04-01 2026-04-24 peng
-```
+## 约束与维护说明
 
-指定仓库清单：
-
-```bash
-./start.sh directory=/path/to/directory.txt
-```
-
-使用默认仓库清单：
-
-```bash
-./start.sh
-./start.sh web
-```
-
-指定时间范围导出：
-
-```bash
-./start.sh 2026-04-01 2026-04-24
-```
-
-指定仓库清单并打开 Web 页面：
-
-```bash
-./start.sh directory=/path/to/directory.txt web
-```
-
-解压制品后启动：
-
-```bash
-./start.sh directory=./directory.txt web
-```
-
-## 维护说明
-
-- 修改脚本参数时，需要同步更新 README 的输入结构。
-- 修改 `report-data.json` 字段时，需要同步更新 README 的输出结构和页面读取逻辑。
-- 修改页面筛选时，需要同步检查 TXT 导出，保证看到的结果和导出的结果一致。
-- 修改打包逻辑时，需要确认 `start.sh`、`directory.txt`、`bin` 和 `public/local-report` 都进入制品。
+- 所有数据只在本机处理，不上传外网；打包产物必须内置报告页，不依赖 GitHub Pages / Vercel 等公网服务。
+- 禁止把页面入口改回外网地址；禁止让 `start.sh` 绕过 `./bin/git-workload-report.sh`。
+- 页面筛选与 TXT 导出必须基于当前筛选后的 commits，不能导出全量原始数据。
+- 统计过程必须持续输出 `[进度]` 日志，避免慢设备 / WSL / 大仓库场景下用户误以为卡死。
+- 修改脚本参数时同步更新本文档输入结构；修改 `report-data.json` 字段时同步更新本文档输出结构与页面读取逻辑；修改打包逻辑时确认 `start.sh`、`directory.txt`、`bin`、`public/local-report` 都进入制品。
 - 注释只写业务目的、关键约束和公式来源，不解释普通赋值、循环和 DOM 操作。
