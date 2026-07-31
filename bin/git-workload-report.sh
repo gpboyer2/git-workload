@@ -2487,8 +2487,9 @@ then
     exit 1
 fi
 
-# Ctrl+C（INT）和 kill（TERM）走同一套收尾：停服务、回收子进程、清临时目录。
-trap 'kill "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null; rm -rf "$work_dir"; echo; echo "本地服务已停止，临时报告目录已清理。"; exit 0' INT TERM
+# Ctrl+C（INT）、kill（TERM）、关终端（HUP）走同一套收尾：停服务、回收子进程、清临时目录。
+# 关终端时 SIGHUP 会打到整个前台进程组，脚本和 http.server 都会收到，这里统一清理，不留目录。
+trap 'kill "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null; rm -rf "$work_dir"; echo; echo "本地服务已停止，临时报告目录已清理。"; exit 0' INT TERM HUP
 
 local_url="http://127.0.0.1:$port/"
 
